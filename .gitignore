@@ -1,0 +1,36 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.eggs/
+dist/
+build/
+.venv/
+venv/
+.env
+.coverage
+coverage_html/
+htmlcov/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# CDK
+infrastructure/cdk.out/
+infrastructure/.cdk.staging/
+*.swp
+
+# IDE / OS
+.idea/
+.vscode/
+.DS_Store
+*.log
+
+# Lambda package artifacts
+backend/package/
+*.zip
+
+# Secrets / local config
+frontend/js/config.local.js
+**/credentials*
