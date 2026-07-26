@@ -1,12 +1,17 @@
-"""AWS CDK stack: Cognito + DynamoDB + Lambda (ARM) + HTTP API + S3.
+"""AWS CDK stack: Cognito + DynamoDB + Lambda (ARM) + HTTP API + S3 + CloudFront.
 
 Cost design for <~$10/mo at low traffic:
 - HTTP API (not REST) – lower $ per million requests
 - Lambda arm64 (Graviton) – ~20% cheaper
 - DynamoDB on-demand single table
-- S3 static website (no CloudFront required for MVP)
+- S3 + CloudFront for HTTPS custom domain (dev: melon-dev.com)
 - Cognito free tier (50k MAU)
 - No NAT, no VPC, no RDS
+
+Custom domain (optional via context frontendDomain):
+  cdk deploy -c env=dev -c frontendDomain=melon-dev.com
+Creates Route53 hosted zone + ACM (us-east-1) + CloudFront.
+Point the registrar NS records at the hosted zone nameservers once.
 """
 
 from __future__ import annotations
@@ -22,10 +27,15 @@ from aws_cdk import (
 from aws_cdk import aws_apigatewayv2 as apigwv2
 from aws_cdk import aws_apigatewayv2_authorizers as apigw_auth
 from aws_cdk import aws_apigatewayv2_integrations as apigw_integrations
+from aws_cdk import aws_certificatemanager as acm
+from aws_cdk import aws_cloudfront as cloudfront
+from aws_cdk import aws_cloudfront_origins as origins
 from aws_cdk import aws_cognito as cognito
 from aws_cdk import aws_dynamodb as dynamodb
 from aws_cdk import aws_iam as iam
 from aws_cdk import aws_lambda as lambda_
+from aws_cdk import aws_route53 as route53
+from aws_cdk import aws_route53_targets as targets
 from aws_cdk import aws_s3 as s3
 from aws_cdk import aws_s3_deployment as s3deploy
 from constructs import Construct
@@ -48,6 +58,13 @@ class StemStack(Stack):
         self.env_name = env_name
         is_prod = env_name == "prod"
 
+        # Custom domain for the SPA (HTTPS via CloudFront). Dev default: melon-dev.com
+        frontend_domain = (
+            self.node.try_get_context("frontendDomain")
+            or ("melon-dev.com" if env_name == "dev" else None)
+            or ""
+        ).strip().lower() or None
+
         removal = RemovalPolicy.RETAIN if is_prod else RemovalPolicy.DESTROY
         table = self._create_table(removal)
         user_pool, user_pool_client, admin_group = self._create_cognito(removal)
@@ -55,11 +72,25 @@ class StemStack(Stack):
         fn = self._create_api_lambda(table, user_pool)
         http_api = self._create_http_api(fn, user_pool, user_pool_client)
 
+        # S3 website URL (HTTP) — kept as fallback; primary is custom domain when set
+        s3_website_url = f"http://{frontend_bucket.bucket_website_url}"
+
+        distribution = None
+        frontend_url = s3_website_url
+        if frontend_domain:
+            distribution, frontend_url = self._create_frontend_cdn(
+                frontend_bucket,
+                domain_name=frontend_domain,
+                removal=removal,
+            )
+
         s3deploy.BucketDeployment(
             self,
             "FrontendDeploy",
             sources=[s3deploy.Source.asset(str(FRONTEND_DIR))],
             destination_bucket=frontend_bucket,
+            distribution=distribution,
+            distribution_paths=["/*"] if distribution else None,
             memory_limit=256,
         )
 
@@ -68,13 +99,24 @@ class StemStack(Stack):
         CfnOutput(self, "UserPoolClientId", value=user_pool_client.user_pool_client_id)
         CfnOutput(self, "TableName", value=table.table_name)
         CfnOutput(self, "FrontendBucketName", value=frontend_bucket.bucket_name)
-        CfnOutput(
-            self,
-            "FrontendUrl",
-            value=f"http://{frontend_bucket.bucket_website_url}",
-        )
+        CfnOutput(self, "FrontendS3WebsiteUrl", value=s3_website_url)
+        CfnOutput(self, "FrontendUrl", value=frontend_url)
+        if frontend_domain:
+            CfnOutput(self, "FrontendDomain", value=frontend_domain)
+        if distribution is not None:
+            CfnOutput(
+                self,
+                "CloudFrontDomainName",
+                value=distribution.distribution_domain_name,
+            )
         CfnOutput(self, "AdminGroupName", value=admin_group.group_name or "admin")
         CfnOutput(self, "Region", value=self.region)
+        CfnOutput(
+            self,
+            "GitRepository",
+            value="https://github.com/beawizard/stem-study.git",
+            description="Development repository (unchanged)",
+        )
 
     def _create_table(self, removal: RemovalPolicy) -> dynamodb.Table:
         table = dynamodb.Table(
@@ -146,6 +188,7 @@ class StemStack(Stack):
         return pool, client, admin_group
 
     def _create_frontend_bucket(self, removal: RemovalPolicy) -> s3.Bucket:
+        # Public website endpoint kept as HTTP fallback; CloudFront is primary for HTTPS.
         return s3.Bucket(
             self,
             "FrontendBucket",
@@ -162,6 +205,138 @@ class StemStack(Stack):
             auto_delete_objects=removal == RemovalPolicy.DESTROY,
             encryption=s3.BucketEncryption.S3_MANAGED,
         )
+
+    def _create_frontend_cdn(
+        self,
+        bucket: s3.Bucket,
+        *,
+        domain_name: str,
+        removal: RemovalPolicy,
+    ) -> tuple[cloudfront.Distribution, str]:
+        """HTTPS custom domain: Route53 zone + ACM (us-east-1) + CloudFront.
+
+        After first deploy, set the domain registrar nameservers to the hosted zone NS
+        outputs so ACM can validate and https://{domain} resolves.
+        """
+        zone = route53.PublicHostedZone(
+            self,
+            "FrontendHostedZone",
+            zone_name=domain_name,
+            comment=f"MElon Basic Education frontend ({self.env_name})",
+        )
+
+        # CloudFront requires the certificate in us-east-1.
+        # DnsValidatedCertificate is the supported cross-region pattern for this use case.
+        certificate = acm.DnsValidatedCertificate(
+            self,
+            "FrontendCertificate",
+            domain_name=domain_name,
+            subject_alternative_names=[f"www.{domain_name}"],
+            hosted_zone=zone,
+            region="us-east-1",
+        )
+
+        # Use S3 REST origin with OAI so we do not require the public website endpoint.
+        # Keep public website on for the HTTP fallback URL during migration.
+        origin_access_identity = cloudfront.OriginAccessIdentity(
+            self,
+            "FrontendOAI",
+            comment=f"OAI for {domain_name} ({self.env_name})",
+        )
+        bucket.grant_read(origin_access_identity)
+
+        distribution = cloudfront.Distribution(
+            self,
+            "FrontendDistribution",
+            comment=f"stem-study-{self.env_name} frontend",
+            default_root_object="index.html",
+            domain_names=[domain_name, f"www.{domain_name}"],
+            certificate=certificate,
+            minimum_protocol_version=cloudfront.SecurityPolicyProtocol.TLS_V1_2_2021,
+            price_class=cloudfront.PriceClass.PRICE_CLASS_100,
+            default_behavior=cloudfront.BehaviorOptions(
+                origin=origins.S3BucketOrigin.with_origin_access_identity(
+                    bucket,
+                    origin_access_identity=origin_access_identity,
+                ),
+                viewer_protocol_policy=cloudfront.ViewerProtocolPolicy.REDIRECT_TO_HTTPS,
+                allowed_methods=cloudfront.AllowedMethods.ALLOW_GET_HEAD_OPTIONS,
+                cached_methods=cloudfront.CachedMethods.CACHE_GET_HEAD_OPTIONS,
+                compress=True,
+                cache_policy=cloudfront.CachePolicy.CACHING_OPTIMIZED,
+            ),
+            error_responses=[
+                # SPA: client-side routes fall back to index.html
+                cloudfront.ErrorResponse(
+                    http_status=403,
+                    response_http_status=200,
+                    response_page_path="/index.html",
+                    ttl=Duration.minutes(5),
+                ),
+                cloudfront.ErrorResponse(
+                    http_status=404,
+                    response_http_status=200,
+                    response_page_path="/index.html",
+                    ttl=Duration.minutes(5),
+                ),
+            ],
+        )
+
+        route53.ARecord(
+            self,
+            "FrontendAliasA",
+            zone=zone,
+            record_name=domain_name,
+            target=route53.RecordTarget.from_alias(
+                targets.CloudFrontTarget(distribution)
+            ),
+        )
+        route53.AaaaRecord(
+            self,
+            "FrontendAliasAAAA",
+            zone=zone,
+            record_name=domain_name,
+            target=route53.RecordTarget.from_alias(
+                targets.CloudFrontTarget(distribution)
+            ),
+        )
+        route53.ARecord(
+            self,
+            "FrontendWwwAliasA",
+            zone=zone,
+            record_name=f"www.{domain_name}",
+            target=route53.RecordTarget.from_alias(
+                targets.CloudFrontTarget(distribution)
+            ),
+        )
+        route53.AaaaRecord(
+            self,
+            "FrontendWwwAliasAAAA",
+            zone=zone,
+            record_name=f"www.{domain_name}",
+            target=route53.RecordTarget.from_alias(
+                targets.CloudFrontTarget(distribution)
+            ),
+        )
+
+        CfnOutput(
+            self,
+            "HostedZoneId",
+            value=zone.hosted_zone_id,
+        )
+        CfnOutput(
+            self,
+            "HostedZoneNameServers",
+            value=cdk_join_ns(zone),
+            description=(
+                f"Set these NS records at the domain registrar for {domain_name} "
+                "(currently IONOS). ACM validation and HTTPS need this."
+            ),
+        )
+
+        # Keep removal intent on zone/distribution via stack removal policy (dev DESTROY)
+        del removal  # zone/distribution follow stack; retained only when stack is retained
+        return distribution, f"https://{domain_name}"
 
     def _create_api_lambda(
         self,
@@ -286,3 +461,11 @@ class StemStack(Stack):
         )
 
         return http_api
+
+
+def cdk_join_ns(zone: route53.PublicHostedZone) -> str:
+    """Join hosted zone name servers for a single CfnOutput string."""
+    # hosted_zone_name_servers is a token list; Fn.join at synth time
+    from aws_cdk import Fn
+
+    return Fn.join(", ", zone.hosted_zone_name_servers or [])
