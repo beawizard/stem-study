@@ -54,17 +54,34 @@ const Api = (() => {
 
   return {
     health: () => request("/health"),
-    me: (token) => request("/me", { token }),
+    /**
+     * Learner profile. notices=false (default) skips expensive content_notices.
+     * Pass { notices: true } for Home banner / account content updates.
+     */
+    me: (token, opts = {}) => {
+      const notices = Boolean(opts && opts.notices);
+      return request(`/me?notices=${notices ? "1" : "0"}`, { token });
+    },
     updateMe: (token, body) =>
       request("/me", { method: "PATCH", body, token }),
     /** Public school catalog (token optional — public GET /schools). */
     listSchools: (token) => request("/schools", token ? { token } : {}),
+    /** Admin catalog including pending learner requests. */
+    listSchoolsAdmin: (token) => request("/schools/admin", { token }),
+    /** Public: request a school not yet in the catalog (sign-up). */
+    requestSchool: (body) =>
+      request("/schools/requests", { method: "POST", body }),
     createSchool: (token, body) =>
       request("/schools", { method: "POST", body, token }),
     updateSchool: (token, schoolId, body) =>
       request(`/schools/${encodeURIComponent(schoolId)}`, {
         method: "PUT",
         body,
+        token,
+      }),
+    approveSchool: (token, schoolId) =>
+      request(`/schools/${encodeURIComponent(schoolId)}/approve`, {
+        method: "POST",
         token,
       }),
     deleteSchool: (token, schoolId) =>
@@ -164,7 +181,38 @@ const Api = (() => {
         `/study/progress${subjectId ? `?subject_id=${encodeURIComponent(subjectId)}` : ""}`,
         { token }
       ),
-    insights: (token) => request("/insights", { token }),
+    /**
+     * Lightweight Study page payload: levels + progress for subject_id, plus
+     * progress_rows for the full base topic (radar). Prefer over /insights.
+     */
+    studyLanding: (token, subjectId) =>
+      request(
+        `/study/landing?subject_id=${encodeURIComponent(subjectId)}`,
+        { token }
+      ),
+    /**
+     * One round-trip for Study open: { subjects, landing }.
+     * subjectId optional — server defaults when omitted.
+     */
+    studyBootstrap: (token, subjectId) =>
+      request(
+        `/study/bootstrap${
+          subjectId ? `?subject_id=${encodeURIComponent(subjectId)}` : ""
+        }`,
+        { token }
+      ),
+    /**
+     * Insights dashboard. notices=false (default) skips expensive content_notices.
+     * Prefer ProfileCache / ensureContentNotices for the Home-style banner.
+     */
+    insights: (token, opts = {}) => {
+      const notices = Boolean(opts && opts.notices);
+      const sid = opts && opts.subjectId;
+      const q = new URLSearchParams();
+      q.set("notices", notices ? "1" : "0");
+      if (sid) q.set("subject_id", sid);
+      return request(`/insights?${q.toString()}`, { token });
+    },
     submitPayment: (token, body) => request("/payments", { method: "POST", body, token }),
     listPayments: (token) => request("/payments", { token }),
   };

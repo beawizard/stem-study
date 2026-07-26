@@ -2,10 +2,12 @@
 
 Routes (all require Cognito JWT unless noted):
   GET    /health
-  GET|PATCH         /me
+  GET|PATCH         /me   (GET ?notices=1 includes content_notices; default off)
   GET               /schools                     (public catalog for sign-up)
+  POST              /schools/requests            (public — learner school request)
   POST              /schools                     (admin)
   PUT|DELETE        /schools/{id}                (admin)
+  POST              /schools/{id}/approve        (admin — activate pending request)
   GET|POST          /tasks
   GET|PUT|DELETE    /tasks/{task_id}
   GET               /subjects
@@ -25,7 +27,9 @@ Routes (all require Cognito JWT unless noted):
   POST              /study/assessment              (start placement assessment)
   POST              /study/assessment/{id}/complete
   GET               /study/progress
-  GET               /insights
+  GET               /study/landing?subject_id=     (lightweight Study page payload)
+  GET               /study/bootstrap?subject_id=   (subjects + landing, one round-trip)
+  GET               /insights   (?notices=1 optional; default skips content_notices)
   POST              /payments
   GET               /payments
   GET               /admin/payments              (admin)
@@ -81,6 +85,7 @@ from app.validation import (
     ProfileUpdate,
     QuestionUpdate,
     SchoolCreate,
+    SchoolRequest,
     SchoolUpdate,
     SessionComplete,
     StartAssessment,
@@ -110,6 +115,7 @@ _SESSION_COMPLETE = re.compile(r"^/study/sessions/([^/]+)/complete$")
 _ASSESSMENT_COMPLETE = re.compile(r"^/study/assessment/([^/]+)/complete$")
 _ADMIN_VERIFY = re.compile(r"^/admin/payments/([^/]+)/([^/]+)/verify$")
 _SCHOOL_ID = re.compile(r"^/schools/([^/]+)$")
+_SCHOOL_APPROVE = re.compile(r"^/schools/([^/]+)/approve$")
 
 
 def handler(event: dict[str, Any], context: Any = None) -> dict[str, Any]:
@@ -148,6 +154,23 @@ def _dispatch(event: dict[str, Any]) -> dict[str, Any]:
     if method == "GET" and path == "/schools":
         return ok({"schools": school_service.list_schools()})
 
+    # Public: learner requests a school not yet in the catalog
+    if method == "POST" and path == "/schools/requests":
+        body = _body(event)
+        data = parse_body(SchoolRequest, body)
+        try:
+            school = school_service.request_school(
+                name=data.name,
+                city=data.city or "",
+                province=data.province or "",
+                requester_email=data.requester_email or "",
+            )
+            return created(school)
+        except SchoolConflict as exc:
+            return bad_request(str(exc))
+        except ValueError as exc:
+            return bad_request(str(exc))
+
     user = get_user_context(event)
 
     # Ensure profile exists (free access for now — no subscription gate)
@@ -174,7 +197,15 @@ def _route(
 
     # --- Me ---
     if method == "GET" and path == "/me":
-        return ok(user_service.public_profile(profile))
+        # H2: content_notices are expensive (N+1 level reads). Default off;
+        # clients opt in with ?notices=1 when they need the Home banner.
+        notices_raw = str(qs.get("notices") or "0").strip().lower()
+        include_notices = notices_raw in ("1", "true", "yes")
+        return ok(
+            user_service.public_profile(
+                profile, include_content_notices=include_notices
+            )
+        )
 
     if method == "PATCH" and path == "/me":
         data = parse_body(ProfileUpdate, body)
@@ -184,9 +215,17 @@ def _route(
             school_id=data.school_id,
             grade=data.grade,
         )
-        return ok(user_service.public_profile(updated))
+        # PATCH responses skip notices (same as default GET)
+        return ok(
+            user_service.public_profile(updated, include_content_notices=False)
+        )
 
     # --- Schools (admin write) ---
+    if method == "GET" and path == "/schools/admin":
+        # Admin catalog including pending learner requests
+        require_admin(user)
+        return ok({"schools": school_service.list_schools(include_pending=True)})
+
     if method == "POST" and path == "/schools":
         require_admin(user)
         data = parse_body(SchoolCreate, body)
@@ -201,6 +240,15 @@ def _route(
             )
         except SchoolConflict as exc:
             return bad_request(str(exc))
+
+    m_approve = _SCHOOL_APPROVE.match(path)
+    if m_approve and method == "POST":
+        require_admin(user)
+        school_id = unquote(m_approve.group(1))
+        try:
+            return ok(school_service.approve_school(school_id))
+        except SchoolNotFound:
+            return not_found("School not found")
 
     m_school = _SCHOOL_ID.match(path)
     if m_school:
@@ -445,6 +493,29 @@ def _route(
         subject_id = qs.get("subject_id")
         return ok({"progress": study_service.list_progress(user.user_id, subject_id)})
 
+    # Lightweight Study landing: levels + progress + base-topic radar rows
+    # (avoids full GET /insights which walks the entire catalog).
+    if method == "GET" and path == "/study/landing":
+        subject_id = qs.get("subject_id")
+        if not subject_id:
+            return bad_request("subject_id is required")
+        try:
+            return ok(study_service.study_landing(user.user_id, subject_id))
+        except SubjectNotFound:
+            return not_found("Subject not found")
+        except StudyError as exc:
+            return bad_request(str(exc))
+
+    # Study bootstrap: subjects catalog + landing in one request
+    if method == "GET" and path == "/study/bootstrap":
+        subject_id = qs.get("subject_id") or None
+        try:
+            return ok(study_service.study_bootstrap(user.user_id, subject_id))
+        except SubjectNotFound:
+            return not_found("Subject not found")
+        except StudyError as exc:
+            return bad_request(str(exc))
+
     # --- Placement assessment (Home → Assessment) ---
     if method == "GET" and path == "/study/assessment/preview":
         subject_id = qs.get("subject_id")
@@ -487,7 +558,16 @@ def _route(
 
     if method == "GET" and path == "/insights":
         subject_id = qs.get("subject_id")
-        return ok(insights_service.learner_insights(user.user_id, subject_id))
+        # I2: content_notices off by default (use GET /me?notices=1 on Home)
+        notices_raw = str(qs.get("notices") or "0").strip().lower()
+        include_notices = notices_raw in ("1", "true", "yes")
+        return ok(
+            insights_service.learner_insights(
+                user.user_id,
+                subject_id,
+                include_notices=include_notices,
+            )
+        )
 
     # --- Payments ---
     if method == "POST" and path == "/payments":

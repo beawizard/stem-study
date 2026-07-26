@@ -231,3 +231,33 @@ def test_seed_math(dynamodb_table):
     assert r2["subject_created"] is False
     levels = subject_service.list_levels("math")
     assert len(levels) == 3
+
+
+@pytest.mark.unit
+def test_list_levels_ignores_question_volume(dynamodb_table):
+    """list_levels must return only level META even when many questions exist.
+
+    Regression: base-table query SK begins_with LEVEL# also read LEVEL#…#Q#
+    question rows (hundreds per subject), making Study/Insights very slow.
+    """
+    subject_service.create_subject(
+        SubjectCreate(subject_id="math", category="Mathematics", topic="Math")
+    )
+    # Two levels; first has a dense bank (simulate many sets worth of rows)
+    for order, lid in ((1, "l1"), (2, "l2")):
+        subject_service.create_level(
+            "math",
+            LevelCreate(level_id=lid, name=f"Level {order}", order=order, min_questions=1),
+        )
+    # 50 questions on l1 — must not appear as "levels" or inflate list_levels
+    csv_rows = "\n".join(f"{i},+,0,=,{i}" for i in range(50))
+    subject_service.import_questions_csv("math", "l1", csv_rows, replace=True)
+    subject_service.import_questions_csv("math", "l2", "1,+,1,=,2\n", replace=True)
+
+    levels = subject_service.list_levels("math")
+    assert len(levels) == 2
+    assert [lv["level_id"] for lv in levels] == ["l1", "l2"]
+    assert levels[0]["question_count"] == 50
+    assert levels[1]["question_count"] == 1
+    # Public list must not expose question ids as levels
+    assert not any("#Q#" in str(lv.get("level_id") or "") for lv in levels)

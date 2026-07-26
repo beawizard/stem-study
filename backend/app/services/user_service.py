@@ -49,7 +49,10 @@ def ensure_user_profile(
             updates["grade"] = g
         if updates:
             updates["updated_at"] = _iso(_utcnow())
-            return db.update_item(pk, sk, updates)
+            updated = db.update_item(pk, sk, updates)
+            if sid and updates.get("school_id"):
+                _try_link_school(sid, user_id)
+            return updated
         return existing
 
     now = _utcnow()
@@ -86,7 +89,18 @@ def ensure_user_profile(
         if existing:
             return existing
         raise
+    if sid:
+        _try_link_school(sid, user_id)
     return item
+
+
+def _try_link_school(school_id: str, user_id: str) -> None:
+    try:
+        from app.services import school_service
+
+        school_service.link_user(school_id, user_id)
+    except Exception:
+        pass
 
 
 def get_profile(user_id: str) -> dict[str, Any] | None:
@@ -102,14 +116,30 @@ def _resolve_school_name(school_id: str) -> str:
     try:
         from app.services import school_service
 
-        s = school_service.get_school(school_id)
-        name = (s.get("name") or "").strip()
-        city = (s.get("city") or "").strip()
-        province = (s.get("province") or "").strip()
-        loc = ", ".join(p for p in (city, province) if p)
-        return f"{name} ({loc})" if loc else name
+        s = school_service.get_school(school_id, allow_pending=True)
+        return school_service.display_name_for_item(s)
     except Exception:
         return school_id
+
+
+def set_school_name(user_id: str, school_id: str, school_name: str) -> dict[str, Any] | None:
+    """Admin-driven refresh when a pending school is approved (or renamed)."""
+    profile = get_profile(user_id)
+    if not profile:
+        return None
+    current = (profile.get("school_id") or "").strip()
+    if current and current != school_id:
+        # Do not overwrite if the learner already switched schools
+        return profile
+    return db.update_item(
+        keys.user_pk(user_id),
+        keys.user_meta_sk(),
+        {
+            "school_id": school_id,
+            "school_name": school_name,
+            "updated_at": _iso(_utcnow()),
+        },
+    )
 
 
 def update_profile(
@@ -132,11 +162,11 @@ def update_profile(
     if school_id is not None:
         sid = str(school_id).strip()
         if sid:
-            # Validate school exists
+            # Validate school exists (active or pending request)
             try:
                 from app.services import school_service
 
-                school_service.get_school(sid)
+                school_service.get_school(sid, allow_pending=True)
             except Exception as exc:
                 raise ValueError(f"Unknown school_id '{sid}'") from exc
             updates["school_id"] = sid
@@ -149,7 +179,18 @@ def update_profile(
         if len(g) > 40:
             raise ValueError("grade must be at most 40 characters")
         updates["grade"] = g
-    return db.update_item(keys.user_pk(user_id), keys.user_meta_sk(), updates)
+    updated = db.update_item(keys.user_pk(user_id), keys.user_meta_sk(), updates)
+    # Track learners on pending schools so approve can refresh profiles
+    if school_id is not None:
+        sid = str(school_id).strip()
+        if sid:
+            try:
+                from app.services import school_service
+
+                school_service.link_user(sid, user_id)
+            except Exception:
+                pass
+    return updated
 
 
 def update_subscription(

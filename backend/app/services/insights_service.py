@@ -13,6 +13,10 @@ SLOW_MS = 30_000
 HIGH_ACCURACY = 0.9
 LOW_ACCURACY = 0.6
 
+# I3: bound SESSION# reads (SK is random uuid — we sample a cap, then sort by started_at)
+RECENT_SESSIONS_LIMIT = 10
+SESSION_SCAN_CAP = 40
+
 
 def build_recommendation(
     *,
@@ -67,46 +71,73 @@ def build_recommendation(
     }
 
 
-def _active_level_ids_for_subjects(subject_ids: set[str]) -> set[tuple[str, str]]:
-    """Return {(subject_id, level_id)} for levels that still exist (not soft-deleted)."""
+def _levels_by_subject(subject_ids: set[str]) -> dict[str, list[dict[str, Any]]]:
+    """I4: list_levels once per subject (GSI META only)."""
     from app.services import subject_service
     from app.services.subject_service import SubjectNotFound
 
-    active: set[tuple[str, str]] = set()
+    out: dict[str, list[dict[str, Any]]] = {}
     for sid in subject_ids:
         if not sid:
             continue
         try:
-            for lv in subject_service.list_levels(sid):
-                lid = lv.get("level_id")
-                if lid:
-                    active.add((sid, lid))
+            out[sid] = subject_service.list_levels(sid)
         except SubjectNotFound:
-            continue
+            out[sid] = []
+        except Exception:
+            out[sid] = []
+    return out
+
+
+def _active_level_ids_from_map(
+    levels_by_subject: dict[str, list[dict[str, Any]]],
+) -> set[tuple[str, str]]:
+    active: set[tuple[str, str]] = set()
+    for sid, levels in levels_by_subject.items():
+        for lv in levels:
+            lid = lv.get("level_id")
+            if lid:
+                active.add((sid, lid))
     return active
 
 
-def learner_insights(user_id: str, subject_id: str | None = None) -> dict[str, Any]:
+def learner_insights(
+    user_id: str,
+    subject_id: str | None = None,
+    *,
+    include_notices: bool = False,
+) -> dict[str, Any]:
     """Aggregate progress + recent sessions for dashboard insights.
 
-    Progress and sessions for soft-deleted (or missing) levels are omitted so
-    Insights never shows orphaned rows like leftover seed/import levels.
+    Performance (I1–I4):
+      I1 — only subjects the learner has touched (no full catalog expand)
+      I2 — content_notices optional (default off; use GET /me?notices=1)
+      I3 — cap SESSION# reads (no full session history)
+      I4 — list_levels once per touched subject; reuse for filter + table
     """
+    from app.services import study_service, subject_service
+    from app.services.study_service import BADGE_LABELS, _better_badge, resolve_progress_badge
+    from app.services.subject_service import SubjectNotFound
+
     prefix = "PROGRESS#"
     if subject_id:
         prefix = f"PROGRESS#{subject_id}#"
     progress_items = db.query_pk(keys.user_pk(user_id), sk_begins_with=prefix)
     progress_items = [p for p in progress_items if not p.get("deleted_at")]
 
-    # Drop progress for levels that no longer exist (e.g. admin deleted Level1-0 / l1)
-    subject_ids = {
-        p.get("subject_id")
+    # Subjects the learner has actually practiced
+    subject_ids_touched: set[str] = {
+        str(p.get("subject_id"))
         for p in progress_items
         if p.get("subject_id")
     }
     if subject_id:
-        subject_ids.add(subject_id)
-    active_levels = _active_level_ids_for_subjects(subject_ids)
+        subject_ids_touched.add(subject_id)
+
+    # I4: one list_levels pass for touched subjects only
+    levels_by_subject = _levels_by_subject(subject_ids_touched)
+    active_levels = _active_level_ids_from_map(levels_by_subject)
+
     progress_items = [
         p
         for p in progress_items
@@ -124,33 +155,53 @@ def learner_insights(user_id: str, subject_id: str | None = None) -> dict[str, A
     ]
     avg_accuracy = sum(accuracies) / len(accuracies) if accuracies else None
 
-    # Recent sessions (same active-level filter)
-    sessions = db.query_pk(keys.user_pk(user_id), sk_begins_with="SESSION#")
+    # I3: bound session reads (avoid loading entire SESSION# history)
+    sessions = db.query_pk(
+        keys.user_pk(user_id),
+        sk_begins_with="SESSION#",
+        limit=SESSION_SCAN_CAP,
+        scan_forward=False,
+    )
     sessions = [s for s in sessions if not s.get("deleted_at")]
     if subject_id:
         sessions = [s for s in sessions if s.get("subject_id") == subject_id]
-    session_subject_ids = {s.get("subject_id") for s in sessions if s.get("subject_id")}
-    if session_subject_ids - subject_ids:
-        active_levels = active_levels | _active_level_ids_for_subjects(
-            session_subject_ids - subject_ids
-        )
+    # Prefer sessions whose levels still exist
     sessions = [
         s
         for s in sessions
-        if (s.get("subject_id"), s.get("level_id")) in active_levels
+        if not s.get("subject_id")
+        or not s.get("level_id")
+        or (s.get("subject_id"), s.get("level_id")) in active_levels
+        or (s.get("subject_id") not in levels_by_subject)
     ]
     sessions.sort(key=lambda s: s.get("started_at") or "", reverse=True)
-    recent = sessions[:10]
+    recent = sessions[:RECENT_SESSIONS_LIMIT]
 
     avg_session_ms = None
     completed_sessions = [s for s in recent if s.get("status") == "completed"]
     if completed_sessions:
-        avg_session_ms = sum(int(s.get("total_elapsed_ms") or 0) for s in completed_sessions) / len(
-            completed_sessions
-        )
+        avg_session_ms = sum(
+            int(s.get("total_elapsed_ms") or 0) for s in completed_sessions
+        ) / len(completed_sessions)
+    elif completed:
+        # Fallback: mean of best/last elapsed on completed progress rows
+        elapsed_vals = []
+        for p in completed:
+            v = p.get("best_elapsed_ms")
+            if v is None:
+                v = p.get("last_elapsed_ms")
+            if v is not None:
+                try:
+                    elapsed_vals.append(int(v))
+                except (TypeError, ValueError):
+                    pass
+        if elapsed_vals:
+            avg_session_ms = sum(elapsed_vals) / len(elapsed_vals)
 
     # High-level recommendation
-    if failed and not completed:
+    if not progress_items:
+        summary = "Start studying to see your insights and progress here."
+    elif failed and not completed:
         summary = "Focus on foundation levels before advancing."
     elif in_progress and not failed:
         summary = "Keep going — finish your in-progress levels."
@@ -161,37 +212,30 @@ def learner_insights(user_id: str, subject_id: str | None = None) -> dict[str, A
     else:
         summary = "Steady progress. Complete remaining levels and watch for speed vs accuracy balance."
 
-    from app.services import study_service, subject_service
-    from app.services.study_service import BADGE_LABELS, _better_badge, resolve_progress_badge
-    from app.services.subject_service import SubjectNotFound
-
-    content_notices = study_service.list_content_notices(user_id)
+    # I2: skip expensive list_content_notices unless explicitly requested
+    content_notices: list[dict[str, Any]] = []
+    if include_notices:
+        content_notices = study_service.list_content_notices(user_id)
 
     # Index learner progress by (subject_id, level_id)
     progress_by_key: dict[tuple[str, str], dict[str, Any]] = {}
-    subject_ids_touched: set[str] = set()
     for p in progress_items:
         sid = p.get("subject_id") or ""
         lid = p.get("level_id") or ""
         if not sid or not lid:
             continue
         progress_by_key[(sid, lid)] = p
-        subject_ids_touched.add(sid)
 
-    # Prefer subjects the learner has touched; also include all active subjects
-    # so Insights can list full catalogs when exploring STEM content.
-    try:
-        all_subjects = subject_service.list_subjects()
-    except Exception:
-        all_subjects = []
-    subjects_by_id = {s.get("subject_id"): s for s in all_subjects if s.get("subject_id")}
+    # I1: only subjects the learner has touched — no full catalog expand
+    subjects_by_id: dict[str, dict[str, Any]] = {}
     for sid in subject_ids_touched:
-        if sid not in subjects_by_id:
-            try:
-                raw = subject_service.get_subject(sid)
-                subjects_by_id[sid] = subject_service._public_subject(raw)
-            except SubjectNotFound:
-                continue
+        try:
+            raw = subject_service.get_subject(sid)
+            subjects_by_id[sid] = subject_service._public_subject(raw)
+        except SubjectNotFound:
+            continue
+        except Exception:
+            continue
 
     progress_rows: list[dict[str, Any]] = []
     topic_summary: list[dict[str, Any]] = []
@@ -203,25 +247,15 @@ def learner_insights(user_id: str, subject_id: str | None = None) -> dict[str, A
             (kv[1] or {}).get("label") or kv[0] or "",
         ),
     ):
-        # Only show topics the learner has started (or all if none? show all with levels)
-        try:
-            levels = subject_service.list_levels(sid)
-        except Exception:
-            levels = []
-        if not levels:
+        # I1: skip subjects with no progress touch
+        has_any = any(k[0] == sid for k in progress_by_key)
+        if not has_any:
             continue
 
-        # Skip subjects with zero learner contact unless they have levels and we
-        # want full catalog — require at least one progress touch OR include all.
-        # Product: show subjects user has progress on; if none at all, empty OK.
-        has_any = any((sid, lv.get("level_id")) in progress_by_key for lv in levels)
-        if not has_any and subject_ids_touched:
-            # User has progress elsewhere; skip untouched subjects
-            if sid not in subject_ids_touched:
-                continue
-        elif not has_any and not subject_ids_touched:
-            # No progress yet — still list subjects so table shows all sets as "new"
-            pass
+        # I4: reuse levels from the single pass above
+        levels = levels_by_subject.get(sid) or []
+        if not levels:
+            continue
 
         category = (subj or {}).get("category") or "Mathematics"
         topic = (subj or {}).get("topic") or (subj or {}).get("name") or sid
@@ -233,7 +267,6 @@ def learner_insights(user_id: str, subject_id: str | None = None) -> dict[str, A
         best_badge = None
         levels_total = len(levels)
 
-        # list_levels already returns levels sorted by admin ORDER field
         for lv in levels:
             lid = lv.get("level_id") or ""
             level_name = lv.get("name") or lid
@@ -282,11 +315,10 @@ def learner_insights(user_id: str, subject_id: str | None = None) -> dict[str, A
         all_complete = levels_total > 0 and remaining == 0
         avg_ms = round(elapsed_sum / elapsed_n, 1) if elapsed_n else None
 
-        # Topic badge only when every question set is completed
         topic_badge = best_badge if all_complete else None
         if remaining == 1:
             encourage = (
-                f"Almost there! Just 1 more set to earn your topic badge — you've got this!"
+                "Almost there! Just 1 more set to earn your topic badge — you've got this!"
             )
         elif remaining > 1:
             encourage = (
@@ -296,29 +328,25 @@ def learner_insights(user_id: str, subject_id: str | None = None) -> dict[str, A
         else:
             encourage = "All sets complete — wear your badge with pride!"
 
-        # Include topic if learner touched it or has any progress system-wide list
-        if has_any or not subject_ids_touched or sid in subject_ids_touched:
-            topic_summary.append(
-                {
-                    "subject_id": sid,
-                    "category": category,
-                    "topic": topic,
-                    "subject_label": subject_label,
-                    "levels_completed": levels_completed,
-                    "levels_total": levels_total,
-                    "levels_tracked": levels_total,
-                    "levels_remaining": remaining,
-                    "all_complete": all_complete,
-                    "avg_elapsed_ms": avg_ms,
-                    "speed_badge": topic_badge,
-                    "speed_badge_label": BADGE_LABELS.get(topic_badge)
-                    if topic_badge
-                    else None,
-                    "encourage_message": encourage if not all_complete else None,
-                }
-            )
+        topic_summary.append(
+            {
+                "subject_id": sid,
+                "category": category,
+                "topic": topic,
+                "subject_label": subject_label,
+                "levels_completed": levels_completed,
+                "levels_total": levels_total,
+                "levels_tracked": levels_total,
+                "levels_remaining": remaining,
+                "all_complete": all_complete,
+                "avg_elapsed_ms": avg_ms,
+                "speed_badge": topic_badge,
+                "speed_badge_label": BADGE_LABELS.get(topic_badge) if topic_badge else None,
+                "encourage_message": encourage if not all_complete else None,
+            }
+        )
 
-    # If user has progress only on deleted subjects, still surface those rows
+    # Progress on deleted subjects/levels (orphan rows) — surface without re-querying catalog
     for (sid, lid), p in progress_by_key.items():
         if any(r["subject_id"] == sid and r["level_id"] == lid for r in progress_rows):
             continue
@@ -328,7 +356,7 @@ def learner_insights(user_id: str, subject_id: str | None = None) -> dict[str, A
                 "subject_id": sid,
                 "level_id": lid,
                 "level_name": lid,
-                "order": 10**9,  # unknown / orphan — after ordered catalog rows
+                "order": 10**9,
                 "category": "—",
                 "topic": sid,
                 "subject_label": sid,
@@ -341,7 +369,6 @@ def learner_insights(user_id: str, subject_id: str | None = None) -> dict[str, A
             }
         )
 
-    # Sort like Admin Content: subject, then level ORDER (not alphabetical level_id)
     progress_rows.sort(
         key=lambda r: (
             r.get("subject_label") or "",
@@ -358,7 +385,9 @@ def learner_insights(user_id: str, subject_id: str | None = None) -> dict[str, A
         "levels_in_progress": len(in_progress),
         "levels_failed": len(failed),
         "avg_best_accuracy": round(avg_accuracy, 4) if avg_accuracy is not None else None,
-        "avg_session_elapsed_ms": round(avg_session_ms, 1) if avg_session_ms is not None else None,
+        "avg_session_elapsed_ms": round(avg_session_ms, 1)
+        if avg_session_ms is not None
+        else None,
         "summary": summary,
         "content_notices": content_notices,
         "topic_summary": topic_summary,

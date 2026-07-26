@@ -389,6 +389,77 @@ input:focus, textarea:focus, select:focus {
   outline: 2px solid rgba(15, 118, 110, 0.35); border-color: var(--brand);
 }
 
+/* Sign-up: request missing school */
+.school-request-hint {
+  margin: 0.35rem 0 0 !important;
+  font-size: 0.85rem;
+}
+.school-request-hint a {
+  color: var(--brand);
+  font-weight: 700;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+.school-request-hint a:hover {
+  color: var(--brand-dark);
+}
+
+/* Modal dialog (school request, etc.) */
+.modal-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 80;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 1rem;
+  background: rgba(15, 23, 42, 0.45);
+  backdrop-filter: blur(2px);
+}
+.modal-overlay.hidden {
+  display: none !important;
+}
+.modal-card {
+  width: min(22rem, 100%);
+  max-height: min(90vh, 36rem);
+  overflow: auto;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+  padding: 1.15rem 1.2rem 1.25rem;
+}
+.modal-card h2 {
+  margin: 0 0 0.4rem;
+  font-size: 1.15rem;
+  color: var(--brand-dark);
+}
+.modal-card .muted {
+  margin: 0 0 0.75rem;
+  font-size: 0.9rem;
+}
+
+.badge {
+  display: inline-block;
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  padding: 0.15rem 0.45rem;
+  border-radius: 999px;
+  text-transform: uppercase;
+}
+.badge-pending {
+  background: #fef3c7;
+  color: #92400e;
+}
+.badge-active {
+  background: #d1fae5;
+  color: #065f46;
+}
+.row-pending td {
+  background: #fffbeb;
+}
+
 /* Password field with eye show/hide toggle */
 .password-field {
   position: relative;

@@ -259,27 +259,33 @@ def get_level(subject_id: str, level_id: str) -> dict[str, Any]:
 
 
 def list_levels(subject_id: str) -> list[dict[str, Any]]:
-    get_subject(subject_id)
-    # Prefer FilterExpression so question rows are dropped server-side when possible
-    try:
-        from boto3.dynamodb.conditions import Attr
+    """List active levels for a subject (META only — does not scan questions).
 
-        items = db.query_pk(
-            keys.subject_pk(subject_id),
-            sk_begins_with="LEVEL#",
-            filter_expr=Attr("entity_type").eq("LEVEL"),
-        )
-    except Exception:
-        items = db.query_pk(keys.subject_pk(subject_id), sk_begins_with="LEVEL#")
+    Levels are stored as ``SK=LEVEL#<id>`` and questions as ``SK=LEVEL#<id>#Q#…``
+    under the same PK. Querying the base table with ``begins_with(LEVEL#)``
+    therefore reads every question (hundreds–thousands of items per subject).
+
+    Levels also project to GSI1 as ``GSI1PK=ENTITY#LEVEL``,
+    ``GSI1SK=<subject_id>#<order>#<level_id>``. Querying that index returns
+    only level META rows (O(levels), not O(questions)).
+    """
+    get_subject(subject_id)
+    items = db.query_gsi1(
+        keys.ENTITY_LEVEL,
+        sk_begins_with=f"{subject_id}#",
+    )
     levels = [
         _public_level(i)
         for i in items
         if i.get("entity_type") == "LEVEL"
         and not i.get("deleted_at")
-        # exclude questions: SK is LEVEL#x#Q#y
+        and (i.get("subject_id") or "") == subject_id
+        # Belt-and-suspenders: question SKs contain #Q#
         and "#Q#" not in (i.get("SK") or "")
     ]
-    levels.sort(key=lambda lv: lv.get("order", 0))
+    # GSI1SK is subject#order#level_id so results are already order-ish;
+    # sort explicitly for stable API (order field is source of truth).
+    levels.sort(key=lambda lv: (int(lv.get("order") or 0), str(lv.get("level_id") or "")))
     return levels
 
 

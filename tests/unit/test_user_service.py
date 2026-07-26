@@ -51,3 +51,14 @@ def test_public_profile(dynamodb_table):
     assert pub["subscription_active"] is True
     assert pub["email"] == "x@y.com"
     assert pub["nickname"] == "Sam"
+
+
+@pytest.mark.unit
+def test_public_profile_notices_opt_in(dynamodb_table):
+    """H2: content_notices only when include_content_notices=True."""
+    p = user_service.ensure_user_profile("u-notices", email="n@y.com", nickname="Ned")
+    fast = user_service.public_profile(p, include_content_notices=False)
+    assert fast.get("content_notices") == []
+    full = user_service.public_profile(p, include_content_notices=True)
+    assert "content_notices" in full
+    assert isinstance(full["content_notices"], list)

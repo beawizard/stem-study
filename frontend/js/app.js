@@ -35,6 +35,185 @@ const App = (() => {
     assessmentPreview: null,
   };
 
+  /**
+   * In-memory client cache for Study (and Assessment catalog).
+   * Subjects TTL 5 min; landing TTL 2 min. Invalidated after completing a set/assessment.
+   */
+  const StudyCache = (() => {
+    const SUBJECTS_TTL_MS = 5 * 60 * 1000;
+    const LANDING_TTL_MS = 2 * 60 * 1000;
+    let subjectsEntry = null; // { t, data: subjects[] }
+    const landingMap = new Map(); // subjectId -> { t, data }
+
+    function getSubjects() {
+      if (!subjectsEntry) return null;
+      if (Date.now() - subjectsEntry.t > SUBJECTS_TTL_MS) {
+        subjectsEntry = null;
+        return null;
+      }
+      return subjectsEntry.data;
+    }
+
+    function setSubjects(list) {
+      subjectsEntry = { t: Date.now(), data: Array.isArray(list) ? list : [] };
+    }
+
+    function getLanding(subjectId) {
+      if (!subjectId) return null;
+      const e = landingMap.get(subjectId);
+      if (!e) return null;
+      if (Date.now() - e.t > LANDING_TTL_MS) {
+        landingMap.delete(subjectId);
+        return null;
+      }
+      return e.data;
+    }
+
+    function setLanding(subjectId, data) {
+      if (!subjectId || !data) return;
+      landingMap.set(subjectId, { t: Date.now(), data });
+      // Sibling subjects share progress_rows; keep a copy under each subject_id
+      // only for the selected landing shape (levels differ per subject) — so we
+      // only store under the requested id.
+    }
+
+    /** Drop all landing entries (progress changed). */
+    function invalidateLanding() {
+      landingMap.clear();
+    }
+
+    /** Drop subjects + landings (admin content change / logout). */
+    function invalidateAll() {
+      subjectsEntry = null;
+      landingMap.clear();
+    }
+
+    /**
+     * Fetch subjects + optional landing with cache + bootstrap batching.
+     * Returns { subjects, landing }.
+     */
+    async function loadStudyData(tok, subjectId) {
+      const cachedSubjects = getSubjects();
+      const cachedLanding = subjectId ? getLanding(subjectId) : null;
+
+      // Full cache hit
+      if (cachedSubjects && (!subjectId || cachedLanding)) {
+        return { subjects: cachedSubjects, landing: cachedLanding || null };
+      }
+
+      // Subjects hit — only need landing for this topic
+      if (cachedSubjects && subjectId && !cachedLanding) {
+        try {
+          const landing = await Api.studyLanding(tok, subjectId);
+          setLanding(subjectId, landing);
+          return { subjects: cachedSubjects, landing };
+        } catch (e) {
+          // fall through to bootstrap / legacy
+        }
+      }
+
+      // One round-trip: catalog + landing
+      try {
+        const boot = await Api.studyBootstrap(tok, subjectId || undefined);
+        const subjects = boot.subjects || [];
+        setSubjects(subjects);
+        let landing = boot.landing || null;
+        if (landing && landing.subject_id) {
+          setLanding(landing.subject_id, landing);
+        }
+        // If client asked for a different subject than bootstrap defaulted to
+        if (
+          subjectId &&
+          (!landing || landing.subject_id !== subjectId)
+        ) {
+          const hit = getLanding(subjectId);
+          if (hit) {
+            landing = hit;
+          } else {
+            try {
+              landing = await Api.studyLanding(tok, subjectId);
+              setLanding(subjectId, landing);
+            } catch {
+              /* leave landing null */
+            }
+          }
+        }
+        return { subjects, landing };
+      } catch {
+        // Legacy: listSubjects + studyLanding separately
+        const res = await Api.listSubjects(tok);
+        const subjects = res.subjects || [];
+        setSubjects(subjects);
+        let landing = null;
+        if (subjectId) {
+          try {
+            landing = await Api.studyLanding(tok, subjectId);
+            setLanding(subjectId, landing);
+          } catch {
+            landing = null;
+          }
+        }
+        return { subjects, landing };
+      }
+    }
+
+    async function loadSubjects(tok) {
+      const hit = getSubjects();
+      if (hit) return hit;
+      const res = await Api.listSubjects(tok);
+      const subjects = res.subjects || [];
+      setSubjects(subjects);
+      return subjects;
+    }
+
+    return {
+      getSubjects,
+      setSubjects,
+      getLanding,
+      setLanding,
+      invalidateLanding,
+      invalidateAll,
+      loadStudyData,
+      loadSubjects,
+    };
+  })();
+
+  /**
+   * I5: Insights payload cache (TTL 90s). Invalidated with progress changes.
+   */
+  const InsightsCache = (() => {
+    const TTL_MS = 90 * 1000;
+    let entry = null; // { t, data, key }
+
+    function cacheKey(subjectId) {
+      return subjectId ? String(subjectId) : "__all__";
+    }
+
+    function get(subjectId) {
+      if (!entry) return null;
+      if (entry.key !== cacheKey(subjectId)) return null;
+      if (Date.now() - entry.t > TTL_MS) {
+        entry = null;
+        return null;
+      }
+      return entry.data;
+    }
+
+    function set(data, subjectId) {
+      if (!data) {
+        entry = null;
+        return;
+      }
+      entry = { t: Date.now(), data, key: cacheKey(subjectId) };
+    }
+
+    function invalidate() {
+      entry = null;
+    }
+
+    return { get, set, invalidate };
+  })();
+
   function clearStudyTimers() {
     if (state.timerInterval) {
       clearInterval(state.timerInterval);
@@ -276,6 +455,9 @@ const App = (() => {
     closeProfileMenu();
     Auth.signOut();
     resetStudyState();
+    StudyCache.invalidateAll();
+    ProfileCache.invalidate();
+    InsightsCache.invalidate();
     state.route = "home";
     state.profile = null;
     state.adminSubjectId = null;
@@ -317,21 +499,170 @@ const App = (() => {
     });
   }
 
-  async function refreshProfile() {
+  /**
+   * H4: short-lived profile cache (default /me without notices).
+   * H1: skipIfFresh avoids double-fetch after login/init.
+   * H2: notices loaded only when requested (Home banner).
+   */
+  const ProfileCache = (() => {
+    const TTL_MS = 90 * 1000; // 1.5 minutes
+    let entry = null; // { t, data, noticesLoaded }
+
+    function get() {
+      if (!entry) return null;
+      if (Date.now() - entry.t > TTL_MS) {
+        entry = null;
+        return null;
+      }
+      return entry.data;
+    }
+
+    function noticesLoaded() {
+      return Boolean(entry && entry.noticesLoaded && Date.now() - entry.t <= TTL_MS);
+    }
+
+    function set(profile, { noticesLoaded: nl = false } = {}) {
+      if (!profile) {
+        entry = null;
+        return;
+      }
+      const prev = entry && entry.data;
+      // Preserve notices if new payload omitted them
+      let data = { ...profile };
+      if (
+        !nl &&
+        prev &&
+        Array.isArray(prev.content_notices) &&
+        data.content_notices == null
+      ) {
+        data.content_notices = prev.content_notices;
+        nl = entry.noticesLoaded;
+      }
+      if (!Array.isArray(data.content_notices)) {
+        data.content_notices = nl ? data.content_notices || [] : data.content_notices || [];
+      }
+      entry = {
+        t: Date.now(),
+        data,
+        noticesLoaded: Boolean(nl) || Boolean(data.content_notices && data.content_notices.length),
+      };
+      // If we stored empty notices array from notices=1, mark loaded
+      if (nl) entry.noticesLoaded = true;
+    }
+
+    function invalidate() {
+      entry = null;
+    }
+
+    return { get, set, noticesLoaded, invalidate };
+  })();
+
+  /**
+   * @param {object} [opts]
+   * @param {boolean} [opts.force] - ignore cache, always network
+   * @param {boolean} [opts.skipIfFresh] - H1: use cache if still within TTL
+   * @param {boolean} [opts.notices] - H2: also ensure content_notices (may extra request)
+   */
+  async function refreshProfile(opts = {}) {
+    const force = Boolean(opts.force);
+    const skipIfFresh = Boolean(opts.skipIfFresh);
+    const wantNotices = Boolean(opts.notices);
+
     if (!Auth.isLoggedIn()) {
       state.profile = null;
+      ProfileCache.invalidate();
       return;
     }
+
+    // H1 / H4: serve from cache when fresh
+    if (!force && skipIfFresh) {
+      const cached = ProfileCache.get();
+      if (cached) {
+        state.profile = cached;
+        if (wantNotices && !ProfileCache.noticesLoaded()) {
+          await ensureContentNotices();
+        }
+        return;
+      }
+    } else if (!force) {
+      const cached = ProfileCache.get();
+      if (cached && (!wantNotices || ProfileCache.noticesLoaded())) {
+        state.profile = cached;
+        return;
+      }
+      if (cached && wantNotices && !ProfileCache.noticesLoaded()) {
+        state.profile = cached;
+        await ensureContentNotices();
+        return;
+      }
+    }
+
     try {
-      state.profile = await Api.me(token());
+      // H2: default GET /me without content_notices (fast)
+      state.profile = await Api.me(token(), { notices: false });
+      ProfileCache.set(state.profile, { noticesLoaded: false });
       // Persist nickname from sign-up session / Cognito token when profile lacks it
       await syncPendingNickname();
+      // syncPendingNickname may PATCH and replace profile — re-cache
+      if (state.profile) {
+        ProfileCache.set(state.profile, {
+          noticesLoaded: ProfileCache.noticesLoaded(),
+        });
+      }
+      if (wantNotices) {
+        await ensureContentNotices();
+      }
     } catch (e) {
       if (e.status === 401) {
         Auth.signOut();
         state.profile = null;
+        ProfileCache.invalidate();
       }
     }
+  }
+
+  /** H2: lazy-load content_notices into profile (GET /me?notices=1). */
+  async function ensureContentNotices() {
+    if (!Auth.isLoggedIn()) return;
+    if (ProfileCache.noticesLoaded() && state.profile) return;
+    try {
+      const full = await Api.me(token(), { notices: true });
+      const notices = Array.isArray(full.content_notices) ? full.content_notices : [];
+      state.profile = {
+        ...(state.profile || {}),
+        ...full,
+        content_notices: notices,
+      };
+      ProfileCache.set(state.profile, { noticesLoaded: true });
+    } catch (e) {
+      if (e.status === 401) {
+        Auth.signOut();
+        state.profile = null;
+        ProfileCache.invalidate();
+      }
+    }
+  }
+
+  /**
+   * After Home is painted, pull notices in the background and inject banner
+   * without a full loading splash.
+   */
+  function scheduleHomeNoticesRefresh() {
+    if (!Auth.isLoggedIn()) return;
+    if (ProfileCache.noticesLoaded()) return;
+    window.setTimeout(async () => {
+      if (state.route !== "home") return;
+      await ensureContentNotices();
+      if (state.route !== "home") return;
+      const notices = (state.profile && state.profile.content_notices) || [];
+      if (!notices.length) return;
+      const mainEl = main();
+      if (!mainEl) return;
+      // Re-render Home quietly (profile already in memory)
+      mainEl.innerHTML = viewHome();
+      updateNavProfileAvatar();
+      bindView();
+    }, 0);
   }
 
   const PENDING_NICKNAME_KEY = "stem_pending_nickname";
@@ -380,6 +711,7 @@ const App = (() => {
     try {
       if (typeof Api.updateMe === "function") {
         state.profile = await Api.updateMe(token(), body);
+        ProfileCache.set(state.profile, { noticesLoaded: false });
       }
       try {
         if (body.nickname) sessionStorage.removeItem(PENDING_NICKNAME_KEY);
@@ -443,6 +775,10 @@ const App = (() => {
             <select id="signup-school">
               <option value="">Loading schools…</option>
             </select>
+            <p class="muted school-request-hint">
+              (If school is not listed,
+              <a href="#" id="school-request-link">request to add</a>)
+            </p>
           </div>
           <div id="grade-wrap" class="hidden">
             <label for="signup-grade">Grade</label>
@@ -480,6 +816,35 @@ const App = (() => {
           <button class="btn block" type="submit" id="auth-submit">Log in</button>
           <button class="btn secondary block hidden" type="button" id="auth-confirm">Confirm email</button>
         </form>
+      </div>
+      <!-- Modal must stay outside #auth-form (nested forms break validation / submit) -->
+      <div id="school-request-modal" class="modal-overlay hidden" role="dialog"
+        aria-modal="true" aria-labelledby="school-request-title">
+        <div class="modal-card">
+          <h2 id="school-request-title">Request a school</h2>
+          <p class="muted">We will notify an administrator. You can use a temporary school name until they approve.</p>
+          <div id="school-request-form" class="stack">
+            <div>
+              <label for="req-school-name">School Name</label>
+              <input id="req-school-name" name="req_school_name" maxlength="120"
+                placeholder="e.g. Rizal Elementary School" autocomplete="organization" />
+            </div>
+            <div>
+              <label for="req-school-city">City</label>
+              <input id="req-school-city" name="req_school_city" maxlength="80"
+                placeholder="e.g. Cebu City" autocomplete="address-level2" />
+            </div>
+            <div>
+              <label for="req-school-province">Province</label>
+              <input id="req-school-province" name="req_school_province" maxlength="80"
+                placeholder="e.g. Cebu" autocomplete="address-level1" />
+            </div>
+            <div class="row" style="margin-top:0.25rem">
+              <button class="btn" type="button" id="school-request-submit">Submit request</button>
+              <button class="btn secondary" type="button" id="school-request-cancel">Cancel</button>
+            </div>
+          </div>
+        </div>
       </div>`;
   }
 
@@ -537,8 +902,7 @@ const App = (() => {
       }
 
       const tok = token();
-      const subjectsRes = await Api.listSubjects(tok);
-      const allSubjects = subjectsRes.subjects || [];
+      const allSubjects = await StudyCache.loadSubjects(tok);
       if (!allSubjects.length) {
         return `<div class="card"><h1>Assessment</h1>
           <p class="muted">No subjects yet. Ask an admin to run seed.</p>
@@ -712,18 +1076,14 @@ const App = (() => {
             We build one test with up to <strong>10 questions from each available Level</strong>
             (Level&nbsp;1, Level&nbsp;2, …) for that topic — e.g. 6 levels → 60 questions.
           </p>
-          <div class="study-header" style="margin-top:0.75rem">
-            <div class="study-header-main">
-              <div class="row study-pickers">
-                <div class="grow">
-                  <label for="assess-category">Category</label>
-                  <select id="assess-category">${catOptions}</select>
-                </div>
-                <div class="grow">
-                  <label for="assess-topic">Topic</label>
-                  <select id="assess-topic" ${baseTopics.length ? "" : "disabled"}>${topicOptions}</select>
-                </div>
-              </div>
+          <div class="study-pickers study-pickers-stacked" style="margin-top:0.75rem">
+            <div class="study-picker-field">
+              <label for="assess-category">Category</label>
+              <select id="assess-category">${catOptions}</select>
+            </div>
+            <div class="study-picker-field">
+              <label for="assess-topic">Topic</label>
+              <select id="assess-topic" ${baseTopics.length ? "" : "disabled"}>${topicOptions}</select>
             </div>
           </div>
         </div>
@@ -890,13 +1250,12 @@ const App = (() => {
       }
 
       const tok = token();
-      // Subjects + insights in parallel: insights supplies set progress for all
-      // major levels so the radar can show Level 1..N for the base topic.
-      const [subjectsRes, insightsData] = await Promise.all([
-        Api.listSubjects(tok),
-        Api.insights(tok).catch(() => null),
-      ]);
-      const allSubjects = subjectsRes.subjects || [];
+      // #3 batch + #4 cache: subjects + landing via bootstrap / cache
+      // (no full /insights; no separate listSubjects + landing when cold).
+      const preferredSid = state.studySubjectId || null;
+      const { subjects: allSubjects, landing: bootLanding } =
+        await StudyCache.loadStudyData(tok, preferredSid);
+
       if (!allSubjects.length) {
         return `<div class="card"><h1>Study</h1><p class="muted">No subjects yet. Ask an admin to run seed.</p></div>`;
       }
@@ -946,22 +1305,74 @@ const App = (() => {
         !topicsInCategory.some((s) => s.subject_id === state.studySubjectId)
       ) {
         const mathPref = topicsInCategory.find((s) => s.subject_id === "math");
-        state.studySubjectId = (mathPref || topicsInCategory[0] || {}).subject_id || null;
+        // Prefer bootstrap landing subject if still in this category
+        const fromBoot =
+          bootLanding &&
+          topicsInCategory.find((s) => s.subject_id === bootLanding.subject_id);
+        state.studySubjectId =
+          (fromBoot || mathPref || topicsInCategory[0] || {}).subject_id || null;
       }
 
       const selected =
         topicsInCategory.find((s) => s.subject_id === state.studySubjectId) ||
         null;
 
+      // Landing: use bootstrap result or cache; fetch only if topic differs
       let levels = [];
       let progMap = {};
+      let radarProgressRows = [];
       if (selected) {
-        const lvRes = await Api.listLevels(tok, selected.subject_id);
-        levels = lvRes.levels || [];
-        const progress = await Api.getProgress(tok, selected.subject_id);
-        progMap = Object.fromEntries(
-          (progress.progress || []).map((p) => [`${p.subject_id}:${p.level_id}`, p])
-        );
+        let landing = null;
+        if (bootLanding && bootLanding.subject_id === selected.subject_id) {
+          landing = bootLanding;
+        } else {
+          landing = StudyCache.getLanding(selected.subject_id);
+        }
+        if (!landing) {
+          try {
+            landing = await Api.studyLanding(tok, selected.subject_id);
+            StudyCache.setLanding(selected.subject_id, landing);
+          } catch (landingErr) {
+            // Fallback: legacy multi-call path
+            try {
+              const [lvRes, progress] = await Promise.all([
+                Api.listLevels(tok, selected.subject_id),
+                Api.getProgress(tok, selected.subject_id),
+              ]);
+              levels = lvRes.levels || [];
+              progMap = Object.fromEntries(
+                (progress.progress || []).map((p) => [
+                  `${p.subject_id}:${p.level_id}`,
+                  p,
+                ])
+              );
+              const base = baseTopicName(selected.topic || selected.name || "");
+              const siblings = allSubjects.filter(
+                (s) =>
+                  (s.category || "Mathematics") ===
+                    (selected.category || "Mathematics") &&
+                  baseTopicName(s.topic || s.name || "") === base
+              );
+              radarProgressRows = await loadProgressRowsForSubjects(
+                tok,
+                siblings
+              );
+              landing = null;
+            } catch {
+              throw landingErr;
+            }
+          }
+        }
+        if (landing) {
+          levels = landing.levels || [];
+          progMap = Object.fromEntries(
+            (landing.progress || []).map((p) => [
+              `${p.subject_id}:${p.level_id}`,
+              p,
+            ])
+          );
+          radarProgressRows = landing.progress_rows || [];
+        }
       }
 
       const categoryOptions = categoriesPresent
@@ -1022,17 +1433,6 @@ const App = (() => {
         .join("");
 
       // Radar: one vertex per major Level (1..N) for this base topic
-      // e.g. Arithmetic (Addition) → Level 1,2,3,4,5,6 — same helper as Insights
-      let radarProgressRows = (insightsData && insightsData.progress) || [];
-      if (!radarProgressRows.length && selected) {
-        const base = baseTopicName(selected.topic || selected.name || "");
-        const siblings = allSubjects.filter(
-          (s) =>
-            (s.category || "Mathematics") === (selected.category || "Mathematics") &&
-            baseTopicName(s.topic || s.name || "") === base
-        );
-        radarProgressRows = await loadProgressRowsForSubjects(tok, siblings);
-      }
       const radarHtml = selected
         ? performanceRadarHtml({
             subjects: allSubjects,
@@ -1584,7 +1984,21 @@ const App = (() => {
 
   async function viewInsights() {
     try {
-      const data = await Api.insights(token());
+      // I5: cache full insights payload; I2: notices from profile, not /insights
+      let data = InsightsCache.get(null);
+      if (!data) {
+        data = await Api.insights(token(), { notices: false });
+        InsightsCache.set(data, null);
+      }
+      // Banner: reuse profile notices (H2) without bloating Insights
+      if (!ProfileCache.noticesLoaded()) {
+        await ensureContentNotices();
+      }
+      const bannerNotices =
+        (state.profile && state.profile.content_notices) ||
+        data.content_notices ||
+        [];
+
       const topicSummary = (data.topic_summary || [])
         .map((t) => {
           const total = t.levels_total != null ? t.levels_total : t.levels_tracked;
@@ -1674,7 +2088,7 @@ const App = (() => {
       });
 
       return `
-        ${contentNoticesHtml(data.content_notices)}
+        ${contentNoticesHtml(bannerNotices)}
         <div class="card insights-summary-card">
           <div class="insights-header">
             <div class="insights-header-main">
@@ -1752,7 +2166,8 @@ const App = (() => {
   }
 
   async function viewAccount() {
-    await refreshProfile();
+    // Prefer cache; load notices only for the banner
+    await refreshProfile({ skipIfFresh: true, notices: true });
     updateNavProfileAvatar();
     const p = state.profile || {};
     const name = learnerDisplayName(p);
@@ -1769,7 +2184,7 @@ const App = (() => {
 
   /** Profile page — editable Name, School, Grade. */
   async function viewProfile() {
-    await refreshProfile();
+    await refreshProfile({ skipIfFresh: true, notices: false });
     updateNavProfileAvatar();
     const p = state.profile || {};
     const name = learnerDisplayName(p);
@@ -1791,7 +2206,24 @@ const App = (() => {
     } catch {
       schools = [];
     }
-    const schoolOpts = schoolSelectOptionsHtml(schools, p.school_id || "");
+    // Keep a pending-requested school visible even though it's not in the public catalog yet
+    const currentSchoolId = p.school_id || "";
+    if (
+      currentSchoolId &&
+      !schools.some((s) => s.school_id === currentSchoolId) &&
+      (p.school_name || currentSchoolId)
+    ) {
+      schools = [
+        {
+          school_id: currentSchoolId,
+          name: p.school_name || currentSchoolId,
+          label: p.school_name || currentSchoolId,
+          pending: true,
+        },
+        ...schools,
+      ];
+    }
+    const schoolOpts = schoolSelectOptionsHtml(schools, currentSchoolId);
 
     return `
       <div class="card">
@@ -1808,6 +2240,11 @@ const App = (() => {
           <div>
             <label for="profile-school">School</label>
             <select id="profile-school">${schoolOpts}</select>
+            ${
+              p.school_name && String(p.school_name).toLowerCase().includes("pending")
+                ? `<p class="muted school-request-hint">Awaiting admin approval for your school request.</p>`
+                : ""
+            }
           </div>
           <div>
             <label for="profile-grade">Grade</label>
@@ -1979,19 +2416,36 @@ const App = (() => {
 
     let schools = [];
     try {
-      const sch = await Api.listSchools(token());
+      const sch =
+        typeof Api.listSchoolsAdmin === "function"
+          ? await Api.listSchoolsAdmin(token())
+          : await Api.listSchools(token());
       schools = sch.schools || [];
     } catch {
       schools = [];
     }
     const schoolRows = schools
-      .map(
-        (s) => `
-        <tr data-school-id="${escapeAttr(s.school_id)}">
-          <td>${escapeHtml(s.name || "")}</td>
+      .map((s) => {
+        const pending = Boolean(s.pending || s.status === "pending");
+        const statusCell = pending
+          ? `<span class="badge badge-pending">Pending</span>`
+          : `<span class="badge badge-active">Active</span>`;
+        const approveBtn = pending
+          ? `<button type="button" class="btn-icon accent" data-admin-approve-school="${escapeAttr(
+              s.school_id
+            )}" title="Approve school request" aria-label="Approve school request">✓</button>`
+          : "";
+        const requester = s.requester_email
+          ? `<div class="muted" style="font-size:0.8rem">${escapeHtml(s.requester_email)}</div>`
+          : "";
+        return `
+        <tr data-school-id="${escapeAttr(s.school_id)}" class="${pending ? "row-pending" : ""}">
+          <td>${escapeHtml(s.name || "")}${requester}</td>
           <td>${escapeHtml(s.city || "—")}</td>
           <td>${escapeHtml(s.province || "—")}</td>
+          <td>${statusCell}</td>
           <td class="row-actions">
+            ${approveBtn}
             <button type="button" class="btn-icon secondary" data-admin-edit-school="${encodeURIComponent(
               JSON.stringify({
                 school_id: s.school_id,
@@ -2004,8 +2458,8 @@ const App = (() => {
               s.school_id
             )}" title="Delete school" aria-label="Delete school">${iconTrash()}</button>
           </td>
-        </tr>`
-      )
+        </tr>`;
+      })
       .join("");
 
     return `
@@ -2019,7 +2473,8 @@ const App = (() => {
 
       <div class="card">
         <h2>Schools</h2>
-        <p class="muted">Schools appear in Sign up and Profile. Location is City and Province.</p>
+        <p class="muted">Schools appear in Sign up and Profile. Location is City and Province.
+          Learner requests show as <strong>Pending</strong> — approve to activate and update their profile.</p>
         <form id="admin-school-form" class="stack">
           <input type="hidden" id="school-edit-id" value="" />
           <div>
@@ -2048,13 +2503,14 @@ const App = (() => {
                 <th>Name</th>
                 <th>City</th>
                 <th>Province</th>
+                <th>Status</th>
                 <th>Actions</th>
               </tr>
             </thead>
             <tbody>
               ${
                 schoolRows ||
-                `<tr><td colspan="4" class="muted">No schools yet. Add one above.</td></tr>`
+                `<tr><td colspan="5" class="muted">No schools yet. Add one above.</td></tr>`
               }
             </tbody>
           </table>
@@ -2885,7 +3341,9 @@ const App = (() => {
       case "pay": html = viewPaywall(); break;
       case "home":
       default:
-        await refreshProfile(); // picks up content_notices for the banner
+        // H1: skip network if profile just loaded (login/init)
+        // H2: paint without notices first; scheduleHomeNoticesRefresh after
+        await refreshProfile({ skipIfFresh: true, notices: false });
         updateNavProfileAvatar();
         html = viewHome();
         break;
@@ -2902,6 +3360,9 @@ const App = (() => {
     }
     if (state.route === "study" && !state.studyPhase) {
       focusStudyLevelIfNeeded();
+    }
+    if (state.route === "home") {
+      scheduleHomeNoticesRefresh();
     }
   }
 
@@ -2925,6 +3386,7 @@ const App = (() => {
           school_id: schoolId,
           grade,
         });
+        ProfileCache.set(state.profile, { noticesLoaded: false });
         updateNavProfileAvatar();
         toast("Profile saved");
         render();
@@ -2995,17 +3457,185 @@ const App = (() => {
     const gradeWrap = document.getElementById("grade-wrap");
     const gradeEl = document.getElementById("signup-grade");
 
-    async function loadSignupSchools() {
+    // Pending school requested in this session (not in public catalog until approved)
+    let pendingTempSchool = null; // { school_id, label }
+
+    async function loadSignupSchools(selectedId) {
       if (!schoolEl) return;
       try {
         const data = await Api.listSchools();
-        schoolEl.innerHTML = schoolSelectOptionsHtml(data.schools || [], "");
+        const list = data.schools || [];
+        const keepId =
+          selectedId ||
+          (pendingTempSchool && pendingTempSchool.school_id) ||
+          schoolEl.value ||
+          "";
+        schoolEl.innerHTML = schoolSelectOptionsHtml(list, keepId);
+        // Re-attach temporary school option after catalog reload
+        if (pendingTempSchool && pendingTempSchool.school_id) {
+          selectTemporarySchool(
+            pendingTempSchool.school_id,
+            pendingTempSchool.label
+          );
+        } else if (
+          keepId &&
+          !list.some((s) => s.school_id === keepId) &&
+          !Array.from(schoolEl.options).some((o) => o.value === keepId)
+        ) {
+          const keepLabel = schoolEl.selectedOptions?.[0]?.textContent || keepId;
+          const opt = document.createElement("option");
+          opt.value = keepId;
+          opt.textContent = keepLabel;
+          opt.selected = true;
+          schoolEl.appendChild(opt);
+        }
       } catch {
         schoolEl.innerHTML = `<option value="">Could not load schools</option>`;
       }
     }
     // Prefetch for Sign up combobox (public endpoint)
     loadSignupSchools();
+
+    /**
+     * Put a temporary (pending) school into the School combobox and select it.
+     */
+    function selectTemporarySchool(schoolId, displayLabel) {
+      if (!schoolEl || !schoolId) return;
+      const label = displayLabel || "Temporary school";
+      // Drop previous temporary option(s)
+      Array.from(schoolEl.options).forEach((o) => {
+        if (o.dataset && o.dataset.tempSchool === "1") o.remove();
+      });
+      let opt = Array.from(schoolEl.options).find((o) => o.value === schoolId);
+      if (!opt) {
+        opt = document.createElement("option");
+        opt.value = schoolId;
+        schoolEl.appendChild(opt);
+      }
+      opt.dataset.tempSchool = "1";
+      opt.textContent = label;
+      opt.selected = true;
+      schoolEl.value = schoolId;
+      // Force UI selection (some browsers need selectedIndex)
+      schoolEl.selectedIndex = Array.from(schoolEl.options).findIndex(
+        (o) => o.value === schoolId
+      );
+      schoolEl.dispatchEvent(new Event("change", { bubbles: true }));
+      pendingTempSchool = { school_id: schoolId, label };
+      try {
+        sessionStorage.setItem(PENDING_SCHOOL_KEY, schoolId);
+      } catch {
+        /* private mode */
+      }
+      updateSignupButtonState();
+    }
+
+    // Request school modal (sign-up only)
+    const schoolReqLink = document.getElementById("school-request-link");
+    const schoolReqModal = document.getElementById("school-request-modal");
+    const schoolReqCancel = document.getElementById("school-request-cancel");
+    const schoolReqSubmit = document.getElementById("school-request-submit");
+
+    function openSchoolRequestModal(e) {
+      if (e) e.preventDefault();
+      if (!schoolReqModal) return;
+      schoolReqModal.classList.remove("hidden");
+      const nameInput = document.getElementById("req-school-name");
+      if (nameInput) {
+        nameInput.value = "";
+        nameInput.focus();
+      }
+      const cityInput = document.getElementById("req-school-city");
+      const provInput = document.getElementById("req-school-province");
+      if (cityInput) cityInput.value = "";
+      if (provInput) provInput.value = "";
+    }
+
+    function closeSchoolRequestModal() {
+      if (schoolReqModal) schoolReqModal.classList.add("hidden");
+    }
+
+    if (schoolReqLink) schoolReqLink.onclick = openSchoolRequestModal;
+    if (schoolReqCancel) schoolReqCancel.onclick = (e) => {
+      if (e) e.preventDefault();
+      closeSchoolRequestModal();
+    };
+    if (schoolReqModal) {
+      schoolReqModal.addEventListener("click", (ev) => {
+        if (ev.target === schoolReqModal) closeSchoolRequestModal();
+      });
+    }
+
+    /**
+     * Submit request → API → close dialog → select Temporary school in combobox.
+     */
+    async function submitSchoolRequest(ev) {
+      if (ev) {
+        ev.preventDefault();
+        ev.stopPropagation();
+      }
+      const name = (document.getElementById("req-school-name")?.value || "").trim();
+      const city = (document.getElementById("req-school-city")?.value || "").trim();
+      const province = (
+        document.getElementById("req-school-province")?.value || ""
+      ).trim();
+      if (!name) {
+        toast("Please enter a school name.", true);
+        document.getElementById("req-school-name")?.focus();
+        return;
+      }
+      const requester_email = (emailEl?.value || "").trim();
+      if (schoolReqSubmit) {
+        schoolReqSubmit.disabled = true;
+        schoolReqSubmit.textContent = "Submitting…";
+      }
+      try {
+        const school = await Api.requestSchool({
+          name,
+          city,
+          province,
+          requester_email,
+        });
+        const sid = school.school_id || "";
+        if (!sid) {
+          throw new Error("Server did not return a school id.");
+        }
+        // Combobox label: Temporary school (+ requested name for clarity)
+        const tempLabel = name
+          ? `Temporary school: ${name}`
+          : "Temporary school";
+
+        // 1) Close popup first for snappy UX
+        closeSchoolRequestModal();
+
+        // 2) Select temporary school in School combobox
+        selectTemporarySchool(sid, tempLabel);
+
+        toast("Request sent. Temporary school is selected — finish sign-up.");
+      } catch (err) {
+        toast(err.message || String(err), true);
+      } finally {
+        if (schoolReqSubmit) {
+          schoolReqSubmit.disabled = false;
+          schoolReqSubmit.textContent = "Submit request";
+        }
+      }
+    }
+
+    if (schoolReqSubmit) {
+      schoolReqSubmit.addEventListener("click", submitSchoolRequest);
+    }
+    // Enter key in modal fields submits the request (no nested form)
+    ["req-school-name", "req-school-city", "req-school-province"].forEach((id) => {
+      const el = document.getElementById(id);
+      if (!el) return;
+      el.addEventListener("keydown", (ev) => {
+        if (ev.key === "Enter") {
+          ev.preventDefault();
+          submitSchoolRequest(ev);
+        }
+      });
+    });
 
     function updateSignupButtonState() {
       if (mode !== "signup") {
@@ -3137,7 +3767,8 @@ const App = (() => {
           showLoading("Signing you in…");
           try {
             await Auth.signIn(email, password);
-            await refreshProfile();
+            // H1/H2: one fast /me (no notices); Home uses cache via skipIfFresh
+            await refreshProfile({ force: true, notices: false });
             toast("Welcome back!");
             navigate("home");
           } catch (loginErr) {
@@ -3328,6 +3959,22 @@ const App = (() => {
       if (!btn || !root.contains(btn)) return;
 
       // Subject / level selectors are change events; handled below
+
+      if (btn.hasAttribute("data-admin-approve-school")) {
+        ev.preventDefault();
+        const sid = btn.getAttribute("data-admin-approve-school");
+        if (!sid) return;
+        btn.disabled = true;
+        try {
+          await Api.approveSchool(token(), sid);
+          toast("School approved. Requester profiles updated.");
+          await render();
+        } catch (err) {
+          toast(err.message || String(err), true);
+          btn.disabled = false;
+        }
+        return;
+      }
 
       if (btn.hasAttribute("data-admin-edit-school")) {
         ev.preventDefault();
@@ -4036,6 +4683,10 @@ const App = (() => {
           });
           state.studyPhase = "results";
           state.studyResults = res;
+          // Progress / radar / profile stats out of date
+          StudyCache.invalidateLanding();
+          ProfileCache.invalidate();
+          InsightsCache.invalidate();
         } else {
           res = await Api.completeSession(token(), state.session.session_id, {
             total_elapsed_ms: totalElapsed,
@@ -4052,6 +4703,9 @@ const App = (() => {
           }
           state.studyPhase = "results";
           state.studyResults = { ...res, setContext };
+          StudyCache.invalidateLanding();
+          ProfileCache.invalidate();
+          InsightsCache.invalidate();
         }
         setStudyModeUi(false);
         document.documentElement.style.setProperty("--vv-keyboard", "0px");
@@ -4605,7 +5259,8 @@ const App = (() => {
     if (Auth.isLoggedIn()) {
       setNavVisible(true);
       showLoading("Welcome back…");
-      refreshProfile()
+      // H1/H2: single fast profile fetch; Home will skipIfFresh
+      refreshProfile({ force: true, notices: false })
         .then(() => {
           updateNavProfileAvatar();
           navigate("home");

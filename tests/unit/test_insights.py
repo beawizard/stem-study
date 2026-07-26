@@ -60,7 +60,13 @@ def test_insights_hides_progress_for_deleted_levels(dynamodb_table):
     """Soft-deleted levels (e.g. seed l1 / old Level1-0) must not appear in Insights."""
     user_id = "user-insights-orphan"
     subject_service.create_subject(
-        SubjectCreate(subject_id="math", name="Math", description="", sort_order=1)
+        SubjectCreate(
+            subject_id="math",
+            category="Mathematics",
+            topic="Math",
+            description="",
+            sort_order=1,
+        )
     )
     subject_service.create_level(
         "math",
@@ -106,3 +112,56 @@ def test_insights_hides_progress_for_deleted_levels(dynamodb_table):
     assert "Level-1-0" in level_ids
     assert "l1" not in level_ids
     assert data["levels_completed"] == 1
+
+
+def test_insights_only_touched_subjects_no_notices_by_default(dynamodb_table):
+    """I1: untouched subjects omitted. I2: notices empty unless requested."""
+    user_id = "user-insights-i1"
+    subject_service.create_subject(
+        SubjectCreate(
+            subject_id="math",
+            category="Mathematics",
+            topic="Addition",
+            sort_order=1,
+        )
+    )
+    subject_service.create_subject(
+        SubjectCreate(
+            subject_id="science-biology",
+            category="Science",
+            topic="Biology",
+            sort_order=2,
+        )
+    )
+    subject_service.create_level(
+        "math",
+        LevelCreate(level_id="l1", name="L1", order=1, min_questions=1),
+    )
+    subject_service.create_level(
+        "science-biology",
+        LevelCreate(level_id="l1", name="Cells", order=1, min_questions=1),
+    )
+    subject_service.import_questions_csv("math", "l1", "1,+,1,=,2\n")
+    subject_service.import_questions_csv("science-biology", "l1", "1,+,1,=,2\n")
+
+    session = study_service.start_session(user_id, "math", "l1")
+    study_service.complete_session(
+        user_id,
+        session["session_id"],
+        total_elapsed_ms=2000,
+        answers=[
+            {"question_id": q["question_id"], "answer": q["answer"]}
+            for q in session["questions"]
+        ],
+    )
+
+    data = learner_insights(user_id, include_notices=False)
+    assert data["content_notices"] == []
+    sids = {t["subject_id"] for t in data["topic_summary"]}
+    assert "math" in sids
+    assert "science-biology" not in sids
+
+    empty = learner_insights("user-never-studied", include_notices=False)
+    assert empty["topic_summary"] == []
+    assert empty["progress"] == []
+    assert "Start studying" in (empty["summary"] or "")

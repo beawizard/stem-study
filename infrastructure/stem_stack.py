@@ -24,6 +24,7 @@ from aws_cdk import aws_apigatewayv2_authorizers as apigw_auth
 from aws_cdk import aws_apigatewayv2_integrations as apigw_integrations
 from aws_cdk import aws_cognito as cognito
 from aws_cdk import aws_dynamodb as dynamodb
+from aws_cdk import aws_iam as iam
 from aws_cdk import aws_lambda as lambda_
 from aws_cdk import aws_s3 as s3
 from aws_cdk import aws_s3_deployment as s3deploy
@@ -186,12 +187,23 @@ class StemStack(Stack):
                 "USER_POOL_ID": user_pool.user_pool_id,
                 "POWERTOOLS_SERVICE_NAME": "stem-study",
                 "LOG_LEVEL": "INFO",
+                # Optional: set via stack context or after deploy
+                #   cdk deploy -c adminNotifyEmail=you@example.com
+                "ADMIN_NOTIFY_EMAIL": self.node.try_get_context("adminNotifyEmail") or "",
+                "SES_FROM_EMAIL": self.node.try_get_context("sesFromEmail") or "",
             },
             description="STEM Study API (ARM64 / Graviton)",
         )
 
         # Least privilege: read/write only this table (includes GSI ARNs)
         table.grant_read_write_data(fn)
+        # Best-effort school-request emails (identity must be verified in SES)
+        fn.add_to_role_policy(
+            iam.PolicyStatement(
+                actions=["ses:SendEmail", "ses:SendRawEmail"],
+                resources=["*"],
+            )
+        )
         return fn
 
     def _create_http_api(
@@ -202,9 +214,10 @@ class StemStack(Stack):
     ) -> apigwv2.HttpApi:
         """
         Use a small set of routes to avoid Lambda resource-policy size limit (20KB):
-          GET /health          – public
-          GET /schools         – public (sign-up school combobox)
-          /{proxy+}            – Cognito JWT
+          GET  /health            – public
+          GET  /schools           – public (sign-up school combobox)
+          POST /schools/requests  – public (learner school request)
+          /{proxy+}               – Cognito JWT
         """
         authorizer = apigw_auth.HttpJwtAuthorizer(
             "CognitoAuthorizer",
@@ -246,6 +259,13 @@ class StemStack(Stack):
         http_api.add_routes(
             path="/schools",
             methods=[apigwv2.HttpMethod.GET],
+            integration=integration,
+        )
+
+        # Public: learner requests a school not yet listed (sign-up modal)
+        http_api.add_routes(
+            path="/schools/requests",
+            methods=[apigwv2.HttpMethod.POST],
             integration=integration,
         )
 

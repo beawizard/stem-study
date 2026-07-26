@@ -14,8 +14,11 @@ SUBJECT#<id>        / LEVEL#<level_id>#Q#<qid>  question
 SCHOOL#<id>         / META                      school catalog (admin-managed)
 
 GSI1 (for admin listings / reverse lookups):
-  GSI1PK = ENTITY#TASK | ENTITY#SUBJECT | ENTITY#PAYMENT | ENTITY#SCHOOL
+  GSI1PK = ENTITY#TASK | ENTITY#SUBJECT | ENTITY#PAYMENT | ENTITY#SCHOOL | ENTITY#LEVEL
   GSI1SK = created_at or subject order
+  For LEVEL: GSI1SK = <subject_id>#<order zero-padded>#<level_id>
+    (list_levels queries GSI1PK=ENTITY#LEVEL, begins_with subject_id# so
+     question rows under SK LEVEL#…#Q# are never scanned)
 """
 
 from __future__ import annotations

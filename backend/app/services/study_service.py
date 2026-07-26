@@ -131,6 +131,133 @@ def list_progress(user_id: str, subject_id: str | None = None) -> list[dict[str,
     return [_public_progress(i) for i in items if not i.get("deleted_at")]
 
 
+def study_landing(user_id: str, subject_id: str) -> dict[str, Any]:
+    """Lightweight payload for the Study page (not full Insights).
+
+    Returns levels + progress for the selected subject, plus set-level
+    ``progress_rows`` for every subject in the same base topic (e.g. all
+    Arithmetic (Addition) Level 1–6 subjects) so the performance radar can
+    render without ``GET /insights`` or N client round-trips.
+    """
+    # Validates subject exists; groups "… - Level N" siblings by base topic
+    group, category, base_topic = resolve_base_topic_group(subject_id)
+    subject_ids = [
+        str(s.get("subject_id") or "") for s in group if s.get("subject_id")
+    ]
+    if subject_id not in subject_ids:
+        subject_ids.insert(0, subject_id)
+
+    # One progress query for the user; filter to this topic group
+    all_progress = list_progress(user_id)
+    progress_by_key: dict[tuple[str, str], dict[str, Any]] = {}
+    for p in all_progress:
+        sid = p.get("subject_id") or ""
+        lid = p.get("level_id") or ""
+        if sid in subject_ids and lid:
+            progress_by_key[(sid, lid)] = p
+
+    selected_progress = [
+        p for (sid, _lid), p in progress_by_key.items() if sid == subject_id
+    ]
+
+    # Levels for every subject in the base-topic group (GSI1 — META only).
+    # Selected subject is included once and reused for the level list.
+    subjects_by_id = {
+        str(s.get("subject_id")): s for s in group if s.get("subject_id")
+    }
+    levels_by_subject: dict[str, list[dict[str, Any]]] = {}
+    for sid in subject_ids:
+        try:
+            levels_by_subject[sid] = subject_service.list_levels(sid)
+        except Exception:
+            levels_by_subject[sid] = []
+
+    levels = levels_by_subject.get(subject_id) or []
+
+    # Radar rows: every set in the base-topic group (unstarted → status "new")
+    progress_rows: list[dict[str, Any]] = []
+    for sid in subject_ids:
+        subj = subjects_by_id.get(sid) or {}
+        lvs = levels_by_subject.get(sid) or []
+        topic = (
+            subj.get("topic")
+            or subj.get("name")
+            or base_topic
+            or sid
+        )
+        cat = subj.get("category") or category or "Mathematics"
+        for lv in lvs:
+            lid = lv.get("level_id") or ""
+            if not lid:
+                continue
+            pr = progress_by_key.get((sid, lid))
+            progress_rows.append(
+                {
+                    "subject_id": sid,
+                    "level_id": lid,
+                    "level_name": lv.get("name") or lid,
+                    "topic": topic,
+                    "category": cat,
+                    "status": (pr or {}).get("status") or "new",
+                    "best_accuracy": (pr or {}).get("best_accuracy"),
+                    "best_elapsed_ms": (pr or {}).get("best_elapsed_ms"),
+                    "avg_elapsed_ms": (pr or {}).get("best_elapsed_ms")
+                    or (pr or {}).get("last_elapsed_ms"),
+                    "speed_badge": (pr or {}).get("speed_badge"),
+                    "speed_badge_label": (pr or {}).get("speed_badge_label"),
+                }
+            )
+
+    try:
+        subject = subject_service.get_subject(subject_id)
+        subject_label = subject_service.subject_label(subject)
+    except Exception:
+        subject_label = f"{category} - {base_topic}" if base_topic else subject_id
+
+    return {
+        "subject_id": subject_id,
+        "subject_label": subject_label,
+        "category": category,
+        "base_topic": base_topic,
+        "subject_ids": subject_ids,
+        "levels": levels,
+        "progress": selected_progress,
+        "progress_rows": progress_rows,
+    }
+
+
+def study_bootstrap(
+    user_id: str,
+    subject_id: str | None = None,
+) -> dict[str, Any]:
+    """Single round-trip for Study open: full subject catalog + optional landing.
+
+    Batches what the SPA previously loaded as ``GET /subjects`` then
+    ``GET /study/landing`` so Home → Study is one network hop when a
+    ``subject_id`` is known (or defaults to the first catalog subject).
+    """
+    subjects = subject_service.list_subjects()
+    landing: dict[str, Any] | None = None
+    sid = (subject_id or "").strip() or None
+
+    if not sid and subjects:
+        # Prefer legacy "math", else first subject in catalog order
+        math_pref = next((s for s in subjects if s.get("subject_id") == "math"), None)
+        sid = (math_pref or subjects[0]).get("subject_id")
+
+    if sid:
+        try:
+            landing = study_landing(user_id, sid)
+        except Exception:
+            # Subject may have been deleted; still return catalog
+            landing = None
+
+    return {
+        "subjects": subjects,
+        "landing": landing,
+    }
+
+
 def _ensure_level_unlocked(user_id: str, subject_id: str, level: dict[str, Any]) -> None:
     """Unlock by major Level N band, not per variation x.
 

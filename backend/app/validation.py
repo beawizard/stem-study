@@ -54,6 +54,27 @@ class SchoolUpdate(BaseModel):
     province: str | None = Field(default=None, max_length=80)
 
 
+class SchoolRequest(BaseModel):
+    """Public sign-up request to add a school not yet in the catalog."""
+
+    model_config = ConfigDict(str_strip_whitespace=True, extra="forbid")
+
+    name: str = Field(..., min_length=1, max_length=120)
+    city: str = Field(default="", max_length=80)
+    province: str = Field(default="", max_length=80)
+    requester_email: str = Field(default="", max_length=160)
+
+    @field_validator("requester_email")
+    @classmethod
+    def validate_email(cls, v: str) -> str:
+        email = (v or "").strip().lower()
+        if not email:
+            return ""
+        if "@" not in email or "." not in email.split("@")[-1]:
+            raise ValueError("Invalid requester_email")
+        return email
+
+
 class TaskCreate(BaseModel):
     model_config = ConfigDict(str_strip_whitespace=True, extra="forbid")
 
