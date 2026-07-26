@@ -11,19 +11,14 @@ Built for mobile/tablet form factors. Target infrastructure cost for ~1,000 user
 | API | API Gateway **HTTP API** + JWT authorizer | Lower cost than REST API |
 | Data | **DynamoDB** single-table, on-demand | No idle cost; no RDS |
 | Auth | **Amazon Cognito** | Free tier 50k MAU |
-| Frontend | **S3 + CloudFront** | HTTPS custom domain (`melon-dev.com`) |
+| Frontend | **S3** static website | Pennies at low traffic |
 | IaC | **AWS CDK (Python)** | Repeatable deploys |
 
 ```
 Browser (SPA) → Cognito (sign-up/login)
              → HTTP API (JWT) → Lambda (Python 3.12, arm64)
                               → DynamoDB (single table)
-             → CloudFront → S3 (static assets)
 ```
-
-**Development frontend URL:** [https://melon-dev.com](https://melon-dev.com)  
-**Development repository:** [https://github.com/beawizard/stem-study.git](https://github.com/beawizard/stem-study.git)  
-S3 website URL remains available as an HTTP fallback after deploy.
 
 No VPC, NAT, or relational DB — those would dominate cost at this scale.
 
@@ -99,22 +94,9 @@ Tests use **moto** to mock DynamoDB. Set `ALLOW_TEST_AUTH=1` is applied by fixtu
 npm install -g aws-cdk
 cd infrastructure
 pip install -r requirements.txt
-cdk bootstrap   # once per account/region (also us-east-1 for ACM/CloudFront cert)
-cdk bootstrap aws://ACCOUNT/us-east-1
-cdk deploy -c env=dev -c region=ap-southeast-1 -c frontendDomain=melon-dev.com
+cdk bootstrap   # once per account/region
+cdk deploy -c env=dev -c region=ap-southeast-1
 ```
-
-Dev defaults (`cdk.json`): `frontendDomain=melon-dev.com`, account `940307563376`.
-
-#### Custom domain DNS (required once)
-
-Stack creates a **Route53 hosted zone** for `melon-dev.com` and an ACM certificate (us-east-1) for CloudFront.
-
-1. After deploy starts (or finishes the zone), copy **HostedZoneNameServers** from stack outputs.
-2. At the domain registrar (IONOS), replace the domain’s nameservers with those four AWS NS values.
-3. Wait for DNS propagation; ACM validation and `https://melon-dev.com` complete automatically.
-
-Until nameservers point at Route53, certificate validation stays pending and `https://melon-dev.com` will not resolve to CloudFront.
 
 After deploy, copy stack outputs into `frontend/index.html` → `window.STEM_CONFIG`:
 
@@ -124,13 +106,12 @@ window.STEM_CONFIG = {
   userPoolId: "ap-southeast-1_XXXX",
   userPoolClientId: "xxxx",
   region: "ap-southeast-1",
-  frontendUrl: "https://melon-dev.com",
   gcashMerchant: "09XX-XXX-XXXX",
   monthlyPricePhp: 99
 };
 ```
 
-Redeploy frontend (or re-run `cdk deploy`) so S3/CloudFront picks up config. Promote an admin:
+Redeploy frontend (or re-run `cdk deploy`) so S3 picks up config. Promote an admin:
 
 ```bash
 aws cognito-idp admin-add-user-to-group \
@@ -149,8 +130,7 @@ Then call `POST /admin/seed` once.
 | HTTP API | &lt; $1 |
 | DynamoDB on-demand | $1–3 |
 | Cognito | $0 (within free tier) |
-| S3 + CloudFront | ~$1–2 |
-| Route53 hosted zone | $0.50 / zone / month |
+| S3 | &lt; $1 |
 | **Total** | **typically well under $10** |
 
 Watch: accidental high Lambda memory/timeout, CloudWatch excessive logs retention, and enabling Cognito advanced security (extra $).
