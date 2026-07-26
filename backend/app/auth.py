@@ -21,6 +21,7 @@ class UserContext:
     email: str | None = None
     groups: list[str] = field(default_factory=list)
     username: str | None = None
+    nickname: str | None = None
 
     @property
     def is_admin(self) -> bool:
@@ -65,6 +66,7 @@ def get_user_context(event: dict[str, Any]) -> UserContext:
                 email=headers.get("x-test-email"),
                 groups=groups,
                 username=headers.get("x-test-user"),
+                nickname=headers.get("x-test-nickname") or headers.get("x-test-name"),
             )
         raise AuthError("Missing authentication claims")
 
@@ -79,11 +81,16 @@ def get_user_context(event: dict[str, Any]) -> UserContext:
     else:
         groups = list(groups_claim)
 
+    nick = claims.get("nickname") or claims.get("name") or claims.get("preferred_username")
+    if nick is not None:
+        nick = str(nick).strip() or None
+
     return UserContext(
         user_id=str(user_id),
         email=claims.get("email"),
         groups=groups,
         username=claims.get("cognito:username") or claims.get("username"),
+        nickname=nick,
     )
 
 

@@ -141,14 +141,10 @@ def verify_payment(
 
 
 def refresh_subscription_status(user_id: str) -> dict[str, Any]:
-    """Lazy-expire trial/active subscriptions past their end date."""
+    """Ensure profile exists. Subscription product is disabled (free access)."""
     profile = user_service.get_profile(user_id)
     if not profile:
         profile = user_service.ensure_user_profile(user_id)
-
-    if profile.get("subscription_status") in ("trial", "active"):
-        if not user_service.is_subscription_active(profile):
-            profile = user_service.update_subscription(user_id, status="expired")
     return profile
 
 

@@ -35,6 +35,20 @@ def test_subject_id_format():
         SubjectCreate(subject_id="1math", name="Bad")
 
 
+def test_subject_category_and_topic():
+    s = SubjectCreate(category="Mathematics", topic="Addition")
+    assert s.category == "Mathematics"
+    assert s.resolved_topic() == "Addition"
+    assert s.subject_id is None  # auto-assigned at create time
+    # case-insensitive category
+    s2 = SubjectCreate(category="science", topic="Biology")
+    assert s2.category == "Science"
+    with pytest.raises(Exception):
+        SubjectCreate(category="History", topic="WWII")
+    with pytest.raises(Exception):
+        SubjectCreate(category="Mathematics")  # missing topic/name
+
+
 def test_level_create_bounds():
     LevelCreate(level_id="l1", name="One", order=1, pass_accuracy=0.8)
     with pytest.raises(Exception):

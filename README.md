@@ -41,7 +41,7 @@ GSI1 supports admin listings (`ENTITY#SUBJECT`, `ENTITY#PAYMENT`, …).
 2. **Tasks** – CRUD, **owner-only**, **soft delete**.
 3. **Subjects** – Math seeded by default; admins can add subjects later.
 4. **Levels & CSV questions** – Admin defines levels; upload CSV such as `1,+,2,=,3`.
-5. **Progression** – Complete a level (accuracy ≥ pass threshold) to unlock the next.
+5. **Progression** – Levels use `Level N-x` naming. All variations of Level N are open once that band is unlocked; complete any Level N set to unlock Level N+1.
 6. **Insights** – Accuracy + time → rule-based study recommendations.
 7. **GCash** – After trial, user submits GCash reference; admin verifies → +30 days access.
 

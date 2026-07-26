@@ -1,6 +1,8 @@
-"""Unit tests for recommendation rules."""
+"""Unit tests for recommendation rules and insights aggregation."""
 
-from app.services.insights_service import build_recommendation
+from app.services import subject_service, study_service
+from app.services.insights_service import build_recommendation, learner_insights
+from app.validation import LevelCreate, SubjectCreate
 
 
 def test_mastery_fast_accurate():
@@ -52,3 +54,55 @@ def test_slow_but_accurate():
         user_id="u",
     )
     assert "careful_mastery" in r["tags"]
+
+
+def test_insights_hides_progress_for_deleted_levels(dynamodb_table):
+    """Soft-deleted levels (e.g. seed l1 / old Level1-0) must not appear in Insights."""
+    user_id = "user-insights-orphan"
+    subject_service.create_subject(
+        SubjectCreate(subject_id="math", name="Math", description="", sort_order=1)
+    )
+    subject_service.create_level(
+        "math",
+        LevelCreate(
+            level_id="Level-1-0",
+            name="Level-1-0",
+            order=1,
+            pass_accuracy=0.8,
+            min_questions=1,
+        ),
+    )
+    subject_service.create_level(
+        "math",
+        LevelCreate(
+            level_id="l1",
+            name="Old seed level",
+            order=2,
+            pass_accuracy=0.8,
+            min_questions=1,
+        ),
+    )
+    subject_service.import_questions_csv("math", "Level-1-0", "1,+,1,=,2\n")
+    subject_service.import_questions_csv("math", "l1", "2,+,2,=,4\n")
+
+    # Create progress on both levels via sessions
+    for lid in ("Level-1-0", "l1"):
+        session = study_service.start_session(user_id, "math", lid)
+        study_service.complete_session(
+            user_id,
+            session["session_id"],
+            total_elapsed_ms=1000,
+            answers=[
+                {"question_id": q["question_id"], "answer": q["answer"]}
+                for q in session["questions"]
+            ],
+        )
+
+    # Soft-delete orphan level (keeps progress rows in DB)
+    subject_service.soft_delete_level("math", "l1")
+
+    data = learner_insights(user_id, "math")
+    level_ids = {p["level_id"] for p in data["progress"]}
+    assert "Level-1-0" in level_ids
+    assert "l1" not in level_ids
+    assert data["levels_completed"] == 1

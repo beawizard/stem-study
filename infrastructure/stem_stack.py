@@ -13,7 +13,6 @@ from __future__ import annotations
 
 from pathlib import Path
 
-import aws_cdk as cdk
 from aws_cdk import (
     CfnOutput,
     Duration,
@@ -67,7 +66,7 @@ class StemStack(Stack):
         CfnOutput(self, "UserPoolId", value=user_pool.user_pool_id)
         CfnOutput(self, "UserPoolClientId", value=user_pool_client.user_pool_client_id)
         CfnOutput(self, "TableName", value=table.table_name)
-        CfnOutput(self, "FrontendBucket", value=frontend_bucket.bucket_name)
+        CfnOutput(self, "FrontendBucketName", value=frontend_bucket.bucket_name)
         CfnOutput(
             self,
             "FrontendUrl",
@@ -85,7 +84,9 @@ class StemStack(Stack):
             sort_key=dynamodb.Attribute(name="SK", type=dynamodb.AttributeType.STRING),
             billing_mode=dynamodb.BillingMode.PAY_PER_REQUEST,
             removal_policy=removal,
-            point_in_time_recovery=self.env_name == "prod",
+            point_in_time_recovery_specification=dynamodb.PointInTimeRecoverySpecification(
+                point_in_time_recovery_enabled=self.env_name == "prod",
+            ),
         )
         table.add_global_secondary_index(
             index_name="GSI1",
@@ -113,7 +114,7 @@ class StemStack(Stack):
                 require_lowercase=True,
                 require_uppercase=True,
                 require_digits=True,
-                require_symbols=False,
+                require_symbols=True,  # matches admin password strength
             ),
             account_recovery=cognito.AccountRecovery.EMAIL_ONLY,
             removal_policy=removal,
@@ -166,8 +167,9 @@ class StemStack(Stack):
         table: dynamodb.Table,
         user_pool: cognito.UserPool,
     ) -> lambda_.Function:
-        # Package backend + pip deps via Docker when available; fallback is plain asset.
-        # For CI/local without Docker, run scripts/package_lambda.sh before deploy.
+        # Prefer pre-built package (scripts/package_lambda.sh) so deploy works without Docker.
+        package_dir = BACKEND_DIR / "lambda_package"
+        asset_path = package_dir if package_dir.is_dir() else BACKEND_DIR
         fn = lambda_.Function(
             self,
             "ApiFunction",
@@ -175,20 +177,10 @@ class StemStack(Stack):
             runtime=lambda_.Runtime.PYTHON_3_12,
             architecture=lambda_.Architecture.ARM_64,
             handler="app.handler.handler",
-            code=lambda_.Code.from_asset(
-                str(BACKEND_DIR),
-                bundling=cdk.BundlingOptions(
-                    image=lambda_.Runtime.PYTHON_3_12.bundling_image,
-                    command=[
-                        "bash",
-                        "-c",
-                        "pip install --no-cache-dir -r /asset-input/requirements-lambda.txt "
-                        "-t /asset-output && cp -R /asset-input/app /asset-output/app",
-                    ],
-                ),
-            ),
-            memory_size=256,
-            timeout=Duration.seconds(15),
+            code=lambda_.Code.from_asset(str(asset_path)),
+            # Assessment can touch many level META rows; 512MB + 90s is still low-cost.
+            memory_size=512,
+            timeout=Duration.seconds(90),
             environment={
                 "TABLE_NAME": table.table_name,
                 "USER_POOL_ID": user_pool.user_pool_id,
@@ -208,6 +200,12 @@ class StemStack(Stack):
         user_pool: cognito.UserPool,
         client: cognito.UserPoolClient,
     ) -> apigwv2.HttpApi:
+        """
+        Use a small set of routes to avoid Lambda resource-policy size limit (20KB):
+          GET /health          – public
+          GET /schools         – public (sign-up school combobox)
+          /{proxy+}            – Cognito JWT
+        """
         authorizer = apigw_auth.HttpJwtAuthorizer(
             "CognitoAuthorizer",
             jwt_issuer=f"https://cognito-idp.{self.region}.amazonaws.com/{user_pool.user_pool_id}",
@@ -237,41 +235,34 @@ class StemStack(Stack):
 
         integration = apigw_integrations.HttpLambdaIntegration("ApiIntegration", fn)
 
+        # Public health check
         http_api.add_routes(
             path="/health",
             methods=[apigwv2.HttpMethod.GET],
             integration=integration,
         )
 
-        protected = [
-            "/me",
-            "/tasks",
-            "/tasks/{task_id}",
-            "/subjects",
-            "/subjects/{subject_id}/levels",
-            "/subjects/{subject_id}/levels/{level_id}/questions",
-            "/study/sessions",
-            "/study/sessions/{session_id}",
-            "/study/sessions/{session_id}/answers",
-            "/study/progress",
-            "/insights",
-            "/payments",
-            "/admin/payments",
-            "/admin/payments/{user_id}/{payment_id}/verify",
-            "/admin/seed",
-        ]
-        for path in protected:
-            http_api.add_routes(
-                path=path,
-                methods=[
-                    apigwv2.HttpMethod.GET,
-                    apigwv2.HttpMethod.POST,
-                    apigwv2.HttpMethod.PUT,
-                    apigwv2.HttpMethod.PATCH,
-                    apigwv2.HttpMethod.DELETE,
-                ],
-                integration=integration,
-                authorizer=authorizer,
-            )
+        # Public school catalog for Sign up (no JWT)
+        http_api.add_routes(
+            path="/schools",
+            methods=[apigwv2.HttpMethod.GET],
+            integration=integration,
+        )
+
+        # Protected catch-all — do NOT use ANY (that captures OPTIONS and forces JWT
+        # on CORS preflight, which browsers send without Authorization → NetworkError).
+        # CORS OPTIONS is handled by cors_preflight above without an authorizer.
+        http_api.add_routes(
+            path="/{proxy+}",
+            methods=[
+                apigwv2.HttpMethod.GET,
+                apigwv2.HttpMethod.POST,
+                apigwv2.HttpMethod.PUT,
+                apigwv2.HttpMethod.PATCH,
+                apigwv2.HttpMethod.DELETE,
+            ],
+            integration=integration,
+            authorizer=authorizer,
+        )
 
         return http_api

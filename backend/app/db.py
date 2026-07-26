@@ -63,6 +63,19 @@ def put_item(item: dict[str, Any], *, condition: str | None = None) -> None:
     get_table().put_item(**kwargs)
 
 
+def batch_put_items(items: list[dict[str, Any]]) -> int:
+    """Bulk put items (best-effort; no condition expressions). Returns count written."""
+    if not items:
+        return 0
+    table = get_table()
+    written = 0
+    with table.batch_writer() as batch:
+        for item in items:
+            batch.put_item(Item=_to_dynamo(item))
+            written += 1
+    return written
+
+
 def get_item(pk: str, sk: str) -> dict[str, Any] | None:
     resp = get_table().get_item(Key={"PK": pk, "SK": sk})
     item = resp.get("Item")

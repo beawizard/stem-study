@@ -38,13 +38,31 @@ const Auth = (() => {
     return s && s.idToken;
   }
 
-  function signUp(email, password) {
+  /**
+   * Self-sign-up into the Cognito user pool as an ordinary learner.
+   * Does not add the user to the "admin" group (admins are provisioned separately).
+   * @param {string} email
+   * @param {string} password
+   * @param {{ nickname?: string }} [opts]
+   */
+  function signUp(email, password, opts = {}) {
     return new Promise((resolve, reject) => {
       const attributeList = [
         new AmazonCognitoIdentity.CognitoUserAttribute({ Name: "email", Value: email }),
       ];
+      const nick = String(opts.nickname || "").trim();
+      if (nick) {
+        // Standard Cognito attributes (pool already has nickname + name as optional)
+        attributeList.push(
+          new AmazonCognitoIdentity.CognitoUserAttribute({ Name: "nickname", Value: nick })
+        );
+        attributeList.push(
+          new AmazonCognitoIdentity.CognitoUserAttribute({ Name: "name", Value: nick })
+        );
+      }
       getUserPool().signUp(email, password, attributeList, null, (err, result) => {
         if (err) return reject(err);
+        // result.user is in the pool only; no group membership is assigned here.
         resolve(result);
       });
     });
@@ -102,5 +120,58 @@ const Auth = (() => {
     return Boolean(getIdToken());
   }
 
-  return { signUp, confirm, signIn, signOut, getIdToken, isLoggedIn, loadSession };
+  function decodeJwtPayload(jwt) {
+    if (!jwt || typeof jwt !== "string") return null;
+    try {
+      const part = jwt.split(".")[1];
+      if (!part) return null;
+      const b64 = part.replace(/-/g, "+").replace(/_/g, "/");
+      const padded = b64 + "=".repeat((4 - (b64.length % 4)) % 4);
+      return JSON.parse(atob(padded));
+    } catch {
+      return null;
+    }
+  }
+
+  /** Cognito groups from the ID token (e.g. ["admin"]). */
+  function getGroups() {
+    const claims = decodeJwtPayload(getIdToken());
+    if (!claims) return [];
+    const g = claims["cognito:groups"] || claims.groups || [];
+    if (Array.isArray(g)) return g.map(String);
+    if (typeof g === "string") {
+      return g
+        .replace(/[\[\]"]/g, "")
+        .split(",")
+        .map((s) => s.trim())
+        .filter(Boolean);
+    }
+    return [];
+  }
+
+  function isAdmin() {
+    const groups = getGroups();
+    return groups.includes("admin") || groups.includes("admins");
+  }
+
+  /** Nickname / name from ID token claims (if Cognito included them). */
+  function getNicknameFromToken() {
+    const claims = decodeJwtPayload(getIdToken());
+    if (!claims) return "";
+    const nick = claims.nickname || claims.name || claims.preferred_username || "";
+    return String(nick).trim();
+  }
+
+  return {
+    signUp,
+    confirm,
+    signIn,
+    signOut,
+    getIdToken,
+    isLoggedIn,
+    loadSession,
+    getGroups,
+    isAdmin,
+    getNicknameFromToken,
+  };
 })();

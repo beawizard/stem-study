@@ -29,8 +29,14 @@ infrastructure/.cdk.staging/
 
 # Lambda package artifacts
 backend/package/
+backend/lambda_package/
 *.zip
 
 # Secrets / local config
 frontend/js/config.local.js
 **/credentials*
+cdk-outputs.json
+
+# Local bug screenshots / repro media (not app source)
+bugs/
+resources/math/~$*
