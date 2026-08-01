@@ -5,9 +5,11 @@ Cost design for <~$10/mo at low traffic:
 - Lambda arm64 (Graviton)
 - DynamoDB on-demand single table
 - Dev: S3 static website (HTTP)
-- Prod: S3 + CloudFront + ACM for https://stem.melon.com (Price Class 100)
+- Prod: S3 + CloudFront (HTTPS via free *.cloudfront.net URL) — no Route53
+- Optional later: custom domain (e.g. stem-melon.com) via CNAME at your registrar
+  to CloudFront + ACM DNS validation CNAMEs — still no Route53 required
 - Cognito free tier
-- No NAT, VPC, RDS, or ALB
+- No NAT, VPC, RDS, ALB, or Route53 hosted zones
 """
 
 from __future__ import annotations
@@ -17,22 +19,18 @@ from pathlib import Path
 from aws_cdk import (
     CfnOutput,
     Duration,
-    Fn,
     RemovalPolicy,
     Stack,
 )
 from aws_cdk import aws_apigatewayv2 as apigwv2
 from aws_cdk import aws_apigatewayv2_authorizers as apigw_auth
 from aws_cdk import aws_apigatewayv2_integrations as apigw_integrations
-from aws_cdk import aws_certificatemanager as acm
 from aws_cdk import aws_cloudfront as cloudfront
 from aws_cdk import aws_cloudfront_origins as origins
 from aws_cdk import aws_cognito as cognito
 from aws_cdk import aws_dynamodb as dynamodb
 from aws_cdk import aws_iam as iam
 from aws_cdk import aws_lambda as lambda_
-from aws_cdk import aws_route53 as route53
-from aws_cdk import aws_route53_targets as targets
 from aws_cdk import aws_s3 as s3
 from aws_cdk import aws_s3_deployment as s3deploy
 from constructs import Construct
@@ -55,13 +53,17 @@ class StemStack(Stack):
         self.env_name = env_name
         is_prod = env_name == "prod"
 
-        # Prod default domain; override with -c frontendDomain=...
-        # Empty string disables custom domain.
+        # Optional future custom domain (must be a domain you own and control DNS for).
+        # Leave empty for prod default: free HTTPS on *.cloudfront.net only.
+        # Example later: -c frontendDomain=stem-melon.com  (still no Route53 —
+        # you add ACM + CloudFront CNAMEs at the registrar yourself; this stack
+        # does not auto-create Route53 zones).
         domain_ctx = self.node.try_get_context("frontendDomain")
-        if domain_ctx is None and is_prod:
-            frontend_domain = "stem.melon.com"
-        else:
-            frontend_domain = (domain_ctx or "").strip().lower() or None
+        frontend_domain = (domain_ctx or "").strip().lower() or None
+        # Prod always gets CloudFront HTTPS; custom domain is optional add-on later
+        use_cloudfront = is_prod or bool(
+            self.node.try_get_context("enableCloudFront")
+        )
 
         removal = RemovalPolicy.RETAIN if is_prod else RemovalPolicy.DESTROY
         table = self._create_table(removal)
@@ -74,11 +76,12 @@ class StemStack(Stack):
         distribution = None
         frontend_url = s3_website_url
 
-        if frontend_domain:
-            distribution, frontend_url = self._create_frontend_cdn(
+        if use_cloudfront:
+            distribution, frontend_url = self._create_cloudfront_https(
                 frontend_bucket,
-                domain_name=frontend_domain,
-                is_prod=is_prod,
+                # Custom domain aliases require a cert; without owning the domain
+                # we only expose the CloudFront default HTTPS URL.
+                domain_name=None,
             )
 
         s3deploy.BucketDeployment(
@@ -99,7 +102,16 @@ class StemStack(Stack):
         CfnOutput(self, "FrontendS3WebsiteUrl", value=s3_website_url)
         CfnOutput(self, "FrontendUrl", value=frontend_url)
         if frontend_domain:
-            CfnOutput(self, "FrontendDomain", value=frontend_domain)
+            CfnOutput(
+                self,
+                "PlannedCustomDomain",
+                value=frontend_domain,
+                description=(
+                    "Not attached until you own DNS for this name. "
+                    "Register the domain, then add CNAME to CloudFrontDomainName "
+                    "and request an ACM cert in us-east-1 (no Route53 required)."
+                ),
+            )
         if distribution is not None:
             CfnOutput(
                 self,
@@ -110,6 +122,12 @@ class StemStack(Stack):
                 self,
                 "CloudFrontDistributionId",
                 value=distribution.distribution_id,
+            )
+            CfnOutput(
+                self,
+                "CloudFrontHttpsUrl",
+                value=f"https://{distribution.distribution_domain_name}",
+                description="AWS-native HTTPS URL (no custom domain purchase needed)",
             )
         CfnOutput(self, "AdminGroupName", value=admin_group.group_name or "admin")
         CfnOutput(self, "Region", value=self.region)
@@ -195,7 +213,6 @@ class StemStack(Stack):
     def _create_frontend_bucket(
         self, removal: RemovalPolicy, *, is_prod: bool
     ) -> s3.Bucket:
-        # Public website kept for HTTP fallback / OAI origin compatibility.
         return s3.Bucket(
             self,
             "FrontendBucket",
@@ -213,38 +230,24 @@ class StemStack(Stack):
             encryption=s3.BucketEncryption.S3_MANAGED,
         )
 
-    def _create_frontend_cdn(
+    def _create_cloudfront_https(
         self,
         bucket: s3.Bucket,
         *,
-        domain_name: str,
-        is_prod: bool,
+        domain_name: str | None,
     ) -> tuple[cloudfront.Distribution, str]:
-        """HTTPS custom domain via CloudFront + ACM (us-east-1) + Route53 zone.
+        """CloudFront HTTPS in front of S3 — no Route53.
 
-        For stem.melon.com, create a public hosted zone and delegate NS from the
-        parent melon.com DNS (Kakao/IONOS/etc.), OR copy the zone NS / ACM CNAMEs
-        as documented in docs/PRODUCTION.md.
+        Default URL is https://<distribution>.cloudfront.net (works immediately).
+        Custom domains are not configured here until you own DNS; then attach
+        aliases + ACM cert in a follow-up change.
         """
-        zone = route53.PublicHostedZone(
-            self,
-            "FrontendHostedZone",
-            zone_name=domain_name,
-            comment=f"MElon STEM frontend ({self.env_name})",
-        )
-
-        certificate = acm.DnsValidatedCertificate(
-            self,
-            "FrontendCertificate",
-            domain_name=domain_name,
-            hosted_zone=zone,
-            region="us-east-1",
-        )
+        del domain_name  # reserved for future alias attach without Route53
 
         oai = cloudfront.OriginAccessIdentity(
             self,
             "FrontendOAI",
-            comment=f"OAI {domain_name} ({self.env_name})",
+            comment=f"OAI stem-study-{self.env_name}",
         )
         bucket.grant_read(oai)
 
@@ -253,10 +256,8 @@ class StemStack(Stack):
             "FrontendDistribution",
             comment=f"stem-study-{self.env_name}",
             default_root_object="index.html",
-            domain_names=[domain_name],
-            certificate=certificate,
+            # No domain_names / certificate → free AWS-managed cert on *.cloudfront.net
             minimum_protocol_version=cloudfront.SecurityPolicyProtocol.TLS_V1_2_2021,
-            # Cost: cheapest edge set (US/EU/Israel) — fine for APAC via mid-tier latency
             price_class=cloudfront.PriceClass.PRICE_CLASS_100,
             default_behavior=cloudfront.BehaviorOptions(
                 origin=origins.S3BucketOrigin.with_origin_access_identity(
@@ -285,37 +286,8 @@ class StemStack(Stack):
             ],
         )
 
-        route53.ARecord(
-            self,
-            "FrontendAliasA",
-            zone=zone,
-            record_name=domain_name,
-            target=route53.RecordTarget.from_alias(
-                targets.CloudFrontTarget(distribution)
-            ),
-        )
-        route53.AaaaRecord(
-            self,
-            "FrontendAliasAAAA",
-            zone=zone,
-            record_name=domain_name,
-            target=route53.RecordTarget.from_alias(
-                targets.CloudFrontTarget(distribution)
-            ),
-        )
-
-        CfnOutput(self, "HostedZoneId", value=zone.hosted_zone_id)
-        CfnOutput(
-            self,
-            "HostedZoneNameServers",
-            value=Fn.join(", ", zone.hosted_zone_name_servers or []),
-            description=(
-                f"Delegate DNS for {domain_name} at the parent registrar "
-                f"(melon.com → NS for label 'stem') to these AWS nameservers."
-            ),
-        )
-        _ = is_prod
-        return distribution, f"https://{domain_name}"
+        https_url = f"https://{distribution.distribution_domain_name}"
+        return distribution, https_url
 
     def _create_api_lambda(
         self,

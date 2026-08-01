@@ -6,16 +6,17 @@ cd "$ROOT"
 export JSII_SILENCE_WARNING_UNTESTED_NODE_VERSION=1
 REGION="${AWS_REGION:-ap-southeast-1}"
 ACCOUNT="${CDK_ACCOUNT:-940307563376}"
-DOMAIN="${FRONTEND_DOMAIN:-stem.melon.com}"
+# Leave empty for free HTTPS on *.cloudfront.net (no Route53, no domain purchase).
+# Later, when you own a domain: register it, then CNAME to CloudFront (still no Route53).
+DOMAIN="${FRONTEND_DOMAIN:-}"
 
 echo "==> Package Lambda"
 bash scripts/package_lambda.sh
 
-echo "==> CDK bootstrap (region + us-east-1 for ACM)"
+echo "==> CDK bootstrap"
 npx --yes aws-cdk@2 bootstrap "aws://${ACCOUNT}/${REGION}"
-npx --yes aws-cdk@2 bootstrap "aws://${ACCOUNT}/us-east-1"
 
-echo "==> CDK deploy StemStudy-prod (domain=${DOMAIN})"
+echo "==> CDK deploy StemStudy-prod (CloudFront HTTPS; custom domain=${DOMAIN:-none})"
 cd infrastructure
 npx --yes aws-cdk@2 deploy StemStudy-prod \
   -c "env=prod" \
@@ -68,7 +69,7 @@ fi
 echo "==> Done deploy. Outputs:"
 cat /tmp/stem-prod-outs.env
 echo
-echo "DNS: set NS for '${DOMAIN}' at parent registrar (melon.com) to HostedZoneNameServers above."
-echo "Then ACM validates and https://${DOMAIN} serves the SPA."
+echo "Prod SPA (HTTPS, no custom domain purchase): ${CloudFrontHttpsUrl:-$FrontendUrl}"
+echo "No Route53. To use stem-melon.com later: buy the domain, CNAME it to CloudFrontDomainName."
 echo
-echo "Migrate data: python scripts/migrate_dev_to_prod.py --source-pool <dev> --dest-pool ${UserPoolId}"
+echo "Migrate data: python scripts/migrate_dev_to_prod.py --source-pool <dev-pool> --dest-pool ${UserPoolId}"
