@@ -64,6 +64,12 @@ const Api = (() => {
     },
     updateMe: (token, body) =>
       request("/me", { method: "PATCH", body, token }),
+    /** Honor-system: claim Facebook Follow → 6 months free subscription. */
+    claimFacebookFollow: (token, body) =>
+      request("/me/facebook/follow", { method: "POST", body, token }),
+    /** Honor-system: FB comment/feedback every 3 months keeps ads suppressed. */
+    claimFacebookEngagement: (token, body) =>
+      request("/me/facebook/engagement", { method: "POST", body, token }),
     /** Public school catalog (token optional — public GET /schools). */
     listSchools: (token) => request("/schools", token ? { token } : {}),
     /** Admin catalog including pending learner requests. */

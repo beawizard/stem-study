@@ -37,6 +37,34 @@ class ProfileUpdate(BaseModel):
         return self
 
 
+class FacebookFollowClaim(BaseModel):
+    """POST /me/facebook/follow — honor-system claim after following on Facebook."""
+
+    model_config = ConfigDict(str_strip_whitespace=True, extra="forbid")
+
+    display_name: str = Field(default="", max_length=80)
+    handle: str = Field(default="", max_length=200)
+    confirmed: bool = True
+
+
+class FacebookEngagementClaim(BaseModel):
+    """POST /me/facebook/engagement — comment / feedback / feature request."""
+
+    model_config = ConfigDict(str_strip_whitespace=True, extra="forbid")
+
+    kind: str = Field(default="comment", max_length=32)
+    display_name: str = Field(default="", max_length=80)
+    text: str = Field(default="", max_length=2000)
+
+    @field_validator("kind")
+    @classmethod
+    def validate_kind(cls, v: str) -> str:
+        k = (v or "comment").strip().lower()
+        if k not in ("comment", "feedback", "feature_request"):
+            raise ValueError("kind must be comment, feedback, or feature_request")
+        return k
+
+
 class SchoolCreate(BaseModel):
     model_config = ConfigDict(str_strip_whitespace=True, extra="forbid")
 

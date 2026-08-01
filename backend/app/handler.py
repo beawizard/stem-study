@@ -78,6 +78,8 @@ from app.services.subject_service import (
 from app.services.task_service import TaskNotFound
 from app.validation import (
     AnswerSubmit,
+    FacebookEngagementClaim,
+    FacebookFollowClaim,
     LevelCreate,
     LevelUpdate,
     PaymentSubmit,
@@ -216,6 +218,32 @@ def _route(
             grade=data.grade,
         )
         # PATCH responses skip notices (same as default GET)
+        return ok(
+            user_service.public_profile(updated, include_content_notices=False)
+        )
+
+    # Facebook Follow → 6 months free; engagement every 3 months keeps ads off
+    if method == "POST" and path == "/me/facebook/follow":
+        data = parse_body(FacebookFollowClaim, body)
+        if not data.confirmed:
+            return bad_request("confirmed must be true after you follow on Facebook")
+        updated = user_service.claim_facebook_follow(
+            user.user_id,
+            display_name=data.display_name or "",
+            handle=data.handle or "",
+        )
+        return ok(
+            user_service.public_profile(updated, include_content_notices=False)
+        )
+
+    if method == "POST" and path == "/me/facebook/engagement":
+        data = parse_body(FacebookEngagementClaim, body)
+        updated = user_service.claim_facebook_engagement(
+            user.user_id,
+            kind=data.kind,
+            display_name=data.display_name or "",
+            text=data.text or "",
+        )
         return ok(
             user_service.public_profile(updated, include_content_notices=False)
         )

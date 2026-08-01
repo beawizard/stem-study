@@ -62,3 +62,46 @@ def test_public_profile_notices_opt_in(dynamodb_table):
     full = user_service.public_profile(p, include_content_notices=True)
     assert "content_notices" in full
     assert isinstance(full["content_notices"], list)
+
+
+@pytest.mark.unit
+def test_facebook_follow_grants_six_month_subscription(dynamodb_table):
+    now = datetime(2026, 3, 1, 12, 0, 0, tzinfo=timezone.utc)
+    with freeze_time(now):
+        user_service.ensure_user_profile("u-fb", email="f@b.com", nickname="Fay")
+        updated = user_service.claim_facebook_follow(
+            "u-fb", display_name="Fay", handle="fay.fb"
+        )
+        assert updated["facebook_followed"] is True
+        assert updated["subscription_status"] == "active"
+        assert updated["subscription_source"] == "facebook_follow"
+        end = datetime.fromisoformat(updated["subscription_ends_at"].replace("Z", "+00:00"))
+        # Extends from any remaining trial window, then + ~180 days
+        assert end >= now + timedelta(days=179)
+        assert end <= now + timedelta(days=220)
+        pub = user_service.public_profile(updated, include_content_notices=False)
+        assert pub["facebook_followed"] is True
+        assert pub["facebook_subscription_active"] is True
+        assert pub["ads_may_appear"] is False
+        assert pub["ad_free_active"] is True
+
+
+@pytest.mark.unit
+def test_facebook_engagement_extends_ad_free(dynamodb_table):
+    start = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    with freeze_time(start):
+        user_service.ensure_user_profile("u-eng", email="e@b.com")
+        user_service.claim_facebook_follow("u-eng")
+    later = start + timedelta(days=100)
+    with freeze_time(later):
+        # Engagement window (90d) expired → ads may appear until new engagement
+        profile = user_service.get_profile("u-eng")
+        mid = user_service.public_profile(profile, include_content_notices=False)
+        assert mid["ads_may_appear"] is True
+        updated = user_service.claim_facebook_engagement(
+            "u-eng", kind="feature_request", text="Add more levels"
+        )
+        pub = user_service.public_profile(updated, include_content_notices=False)
+        assert pub["ad_free_active"] is True
+        assert pub["ads_may_appear"] is False
+        assert pub["last_facebook_engagement_at"]

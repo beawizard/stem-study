@@ -36,7 +36,11 @@ backend/lambda_package/
 frontend/js/config.local.js
 **/credentials*
 cdk-outputs.json
+cdk-outputs-prod.json
+scripts/.migrate-temp-passwords.json
 
-# Local bug screenshots / repro media (not app source)
+# Local bug screenshots / repro media — NOT uploaded to GitHub.
+# Still attachable in Grok with:  @!bugs  or  @!bugs/SomeScreenshot.png
+# (the ! tells the @ picker to include gitignored paths)
 bugs/
 resources/math/~$*

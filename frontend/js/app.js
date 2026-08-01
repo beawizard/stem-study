@@ -369,7 +369,7 @@ const App = (() => {
     if (profileBtn) {
       profileBtn.classList.toggle(
         "is-active-route",
-        route === "account" || route === "profile"
+        route === "account" || route === "profile" || route === "facebook"
       );
     }
     render();
@@ -485,6 +485,7 @@ const App = (() => {
         closeProfileMenu();
         if (action === "account") navigate("account");
         else if (action === "profile") navigate("profile");
+        else if (action === "facebook") navigate("facebook");
         else if (action === "logout") doLogout();
       });
     });
@@ -2165,6 +2166,59 @@ const App = (() => {
       </div>`;
   }
 
+  function formatAccountDate(iso) {
+    if (!iso) return "—";
+    try {
+      const d = new Date(iso);
+      if (Number.isNaN(d.getTime())) return String(iso);
+      return d.toLocaleDateString(undefined, {
+        year: "numeric",
+        month: "short",
+        day: "numeric",
+      });
+    } catch {
+      return String(iso);
+    }
+  }
+
+  /** Subscription / Facebook benefit blurb for Account page. */
+  function accountSubscriptionHtml(p) {
+    const followed = Boolean(p.facebook_followed);
+    const subActive = Boolean(p.facebook_subscription_active);
+    const adsMay = p.ads_may_appear !== false && !p.ad_free_active;
+    const subEnd = formatAccountDate(p.facebook_subscription_ends_at || p.subscription_ends_at);
+    const nextEng = formatAccountDate(p.next_engagement_due_at);
+    const engDays = p.engagement_interval_days || 90;
+
+    let statusLine;
+    if (followed && subActive) {
+      statusLine = `You followed MElon on Facebook — <strong>6 months free subscription</strong> is active until <strong>${escapeHtml(subEnd)}</strong>.`;
+    } else if (followed) {
+      statusLine = `You previously followed MElon on Facebook. Your free subscription window ended on <strong>${escapeHtml(subEnd)}</strong>. Follow again or open Facebook from the menu to renew benefits.`;
+    } else {
+      statusLine = `Follow the <strong>MElon Basic Education</strong> Facebook page to unlock a <strong>6 months free subscription</strong>. Open <strong>Facebook</strong> from the profile menu to get started.`;
+    }
+
+    let adsLine;
+    if (!followed) {
+      adsLine = `If you are <strong>not following</strong> MElon on Facebook, an <strong>ad banner may appear</strong> in a future update (ads are not shown yet).`;
+    } else if (p.ad_free_active) {
+      adsLine = `Ad banner stays off while you stay engaged. Please leave a Facebook <strong>comment</strong> or <strong>feature request</strong> at least every <strong>${engDays} days</strong> (about 3 months). Next check-in by <strong>${escapeHtml(nextEng)}</strong>.`;
+    } else {
+      adsLine = `Your last Facebook comment/feature request is overdue (every <strong>${engDays} days</strong>). An <strong>ad banner may appear</strong> in a future update until you post again via the Facebook menu. Ads are not shown yet.`;
+    }
+
+    return `
+      <div class="account-subscription" style="margin-top:1rem;padding-top:0.85rem;border-top:1px solid var(--border)">
+        <h2 style="font-size:1rem;margin:0 0 0.5rem">Subscription &amp; Facebook</h2>
+        <p class="muted" style="margin:0.35rem 0">${statusLine}</p>
+        <p class="muted" style="margin:0.35rem 0">${adsLine}</p>
+        <p class="muted" style="margin:0.5rem 0 0;font-size:0.85rem">
+          Study remains available to all learners. Facebook benefits are recorded when you confirm Follow or post feedback in the app after using Facebook.
+        </p>
+      </div>`;
+  }
+
   async function viewAccount() {
     // Prefer cache; load notices only for the banner
     await refreshProfile({ skipIfFresh: true, notices: true });
@@ -2178,6 +2232,7 @@ const App = (() => {
         <p class="muted">${escapeHtml(p.email || "")}</p>
         ${Auth.isAdmin() ? `<p><span class="badge ok">Administrator</span></p>` : ""}
         <p class="muted" style="margin-top:0.75rem">Study is free. Profiles inactive for 6 months may be removed to save resources.</p>
+        ${accountSubscriptionHtml(p)}
       </div>
       ${contentNoticesHtml(p.content_notices)}`;
   }
@@ -3231,12 +3286,301 @@ const App = (() => {
         return "Opening Account…";
       case "profile":
         return "Opening Profile…";
+      case "facebook":
+        return "Opening Facebook…";
       case "admin":
         return "Opening Admin…";
       case "pay":
         return "Opening payment…";
       default:
         return "Loading…";
+    }
+  }
+
+  /** Official MElon Facebook profile URL (from STEM_CONFIG or default). */
+  function facebookPageUrl() {
+    const cfg = window.STEM_CONFIG || {};
+    return (
+      (cfg.facebookPageUrl || "").trim() ||
+      "https://www.facebook.com/profile.php?id=61592589455670"
+    );
+  }
+
+  /**
+   * Facebook community page: Follow + Write Feedback.
+   *
+   * Technical note: Meta does not allow a third-party site to Follow a Page or
+   * post a comment using only a username/password collected in-app. Doing that
+   * would require a Meta Developer app, Facebook Login (OAuth), and Graph API
+   * permissions (with app review). Without that, the only complete flow is to
+   * open Facebook so the signed-in Facebook user can Follow or comment there.
+   */
+  async function viewFacebook() {
+    await refreshProfile({ skipIfFresh: true, notices: false });
+    const pageUrl = facebookPageUrl();
+    const p = state.profile || {};
+    const followed = Boolean(p.facebook_followed);
+    // Hide confirm after claim; show again when ad-free window lapses (need new post)
+    const engDone = Boolean(p.ad_free_active);
+    const followConfirmHtml = followed
+      ? `<p class="muted" id="fb-follow-done" style="margin:0.5rem 0 0">✓ Follow confirmed — 6 months free subscription is active.</p>`
+      : `<button type="button" class="btn secondary" id="fb-follow-confirm">I followed Melon</button>`;
+    const feedbackConfirmHtml = engDone
+      ? `<p class="muted" id="fb-feedback-done" style="margin:0.5rem 0 0">✓ Check-in recorded. Next Facebook comment/feature request by ${escapeHtml(formatAccountDate(p.next_engagement_due_at))}.</p>`
+      : `<button type="button" class="btn secondary" id="fb-feedback-confirm">I posted on Facebook</button>`;
+    const followHelp = followed
+      ? `You already confirmed following MElon. Free subscription is tracked on your Account page.`
+      : `Following MElon on Facebook unlocks a <strong>6 months free subscription</strong>. After you follow on Facebook, tap <strong>I followed Melon</strong> to activate it.`;
+    const feedbackHelp = engDone
+      ? `Your last check-in is still valid. Post again after the due date so a future ad banner stays off.`
+      : `Leave a Facebook comment or feature request at least every <strong>3 months</strong> so an ad banner (coming later) stays hidden while you follow us.`;
+
+    return `
+      <div class="card facebook-page">
+        <div class="row" style="justify-content:space-between;align-items:flex-start;gap:0.5rem">
+          <h1 style="margin:0">MElon on Facebook</h1>
+          <button type="button" class="btn secondary btn-sm" data-go="home">← Home</button>
+        </div>
+        <p class="muted" style="margin-top:0.5rem">
+          Stay connected with MElon Basic Education. Follow our page or leave feedback for the team.
+        </p>
+      </div>
+
+      <div class="card facebook-action-card">
+        <h2>Follow</h2>
+        <p class="muted" style="margin:0 0 0.65rem">${followHelp}</p>
+        <form id="fb-follow-form" class="stack facebook-form">
+          <div>
+            <label for="fb-follow-name">Your name (optional)</label>
+            <input id="fb-follow-name" type="text" maxlength="80" autocomplete="name"
+              placeholder="How should we greet you?"
+              value="${escapeAttr(p.facebook_display_name || learnerDisplayName(p) || "")}" />
+          </div>
+          <div>
+            <label for="fb-follow-handle">Facebook name or profile link (optional)</label>
+            <input id="fb-follow-handle" type="text" maxlength="200" autocomplete="off"
+              placeholder="e.g. Jane D. or facebook.com/…"
+              value="${escapeAttr(p.facebook_handle || "")}" />
+          </div>
+          <div class="row" id="fb-follow-actions">
+            ${
+              followed
+                ? ""
+                : `<button type="submit" class="btn accent" id="fb-follow-btn">Open Facebook to Follow</button>`
+            }
+            ${followConfirmHtml}
+          </div>
+        </form>
+      </div>
+
+      <div class="card facebook-action-card">
+        <h2>Write Feedback</h2>
+        <p class="muted" style="margin:0 0 0.65rem">${feedbackHelp}</p>
+        <form id="fb-feedback-form" class="stack facebook-form">
+          <div>
+            <label for="fb-feedback-name">Your name (optional)</label>
+            <input id="fb-feedback-name" type="text" maxlength="80" autocomplete="name"
+              placeholder="Name"
+              value="${escapeAttr(p.facebook_display_name || learnerDisplayName(p) || "")}" />
+          </div>
+          <div>
+            <label for="fb-feedback-kind">Type</label>
+            <select id="fb-feedback-kind" ${engDone ? "disabled" : ""}>
+              <option value="comment">Comment</option>
+              <option value="feedback">Feedback</option>
+              <option value="feature_request">Feature request</option>
+            </select>
+          </div>
+          <div>
+            <label for="fb-feedback-text">Your message</label>
+            <textarea id="fb-feedback-text" ${engDone ? "" : "required"} maxlength="2000" rows="5"
+              placeholder="Tell us what you like or what we can improve…"
+              ${engDone ? "disabled" : ""}></textarea>
+          </div>
+          <div class="row" id="fb-feedback-actions">
+            ${
+              engDone
+                ? ""
+                : `<button type="submit" class="btn accent" id="fb-feedback-btn">Open Facebook to post</button>`
+            }
+            ${feedbackConfirmHtml}
+          </div>
+        </form>
+        <p id="fb-feedback-copy-hint" class="muted hidden" style="margin-top:0.75rem;font-size:0.9rem"></p>
+      </div>
+
+      <div class="card">
+        <div class="row">
+          <button type="button" class="btn" data-go="home">Home</button>
+          <a class="btn secondary" href="${escapeAttr(pageUrl)}" target="_blank" rel="noopener noreferrer">
+            Open Facebook page
+          </a>
+        </div>
+      </div>`;
+  }
+
+  function bindFacebookPage() {
+    const pageUrl = facebookPageUrl();
+
+    const followForm = document.getElementById("fb-follow-form");
+    if (followForm) {
+      followForm.onsubmit = (e) => {
+        e.preventDefault();
+        const name = (document.getElementById("fb-follow-name")?.value || "").trim();
+        const handle = (document.getElementById("fb-follow-handle")?.value || "").trim();
+        try {
+          sessionStorage.setItem(
+            "stem_fb_follow_meta",
+            JSON.stringify({ name, handle, at: Date.now() })
+          );
+        } catch {
+          /* private mode */
+        }
+        window.open(pageUrl, "_blank", "noopener,noreferrer");
+        toast(
+          name
+            ? `Thanks, ${name}! Follow MElon on Facebook, then tap “I followed Melon”.`
+            : "Follow MElon on Facebook, then tap “I followed Melon”."
+        );
+      };
+    }
+
+    const followConfirm = document.getElementById("fb-follow-confirm");
+    if (followConfirm) {
+      followConfirm.onclick = async () => {
+        const name = (document.getElementById("fb-follow-name")?.value || "").trim();
+        const handle = (document.getElementById("fb-follow-handle")?.value || "").trim();
+        followConfirm.disabled = true;
+        try {
+          const profile = await Api.claimFacebookFollow(token(), {
+            display_name: name,
+            handle,
+            confirmed: true,
+          });
+          state.profile = profile;
+          ProfileCache.set(profile, { noticesLoaded: false });
+          toast("6 months free subscription activated. Thank you for following!");
+          // Hide confirm button (and stay on page so user sees it disappear)
+          followConfirm.classList.add("hidden");
+          followConfirm.setAttribute("hidden", "hidden");
+          const openBtn = document.getElementById("fb-follow-btn");
+          if (openBtn) {
+            openBtn.classList.add("hidden");
+            openBtn.setAttribute("hidden", "hidden");
+          }
+          const actions = document.getElementById("fb-follow-actions");
+          if (actions && !document.getElementById("fb-follow-done")) {
+            const done = document.createElement("p");
+            done.id = "fb-follow-done";
+            done.className = "muted";
+            done.style.margin = "0.5rem 0 0";
+            done.textContent =
+              "✓ Follow confirmed — 6 months free subscription is active.";
+            actions.appendChild(done);
+          }
+        } catch (err) {
+          toast(err.message || String(err), true);
+          followConfirm.disabled = false;
+        }
+      };
+    }
+
+    const feedbackForm = document.getElementById("fb-feedback-form");
+    if (feedbackForm) {
+      feedbackForm.onsubmit = async (e) => {
+        e.preventDefault();
+        const name = (document.getElementById("fb-feedback-name")?.value || "").trim();
+        const text = (document.getElementById("fb-feedback-text")?.value || "").trim();
+        const kind = (document.getElementById("fb-feedback-kind")?.value || "comment").trim();
+        if (!text) {
+          toast("Please write your feedback first.", true);
+          return;
+        }
+        const composed = name
+          ? `Feedback from ${name} (MElon Basic Education):\n\n${text}`
+          : `Feedback via MElon Basic Education:\n\n${text}`;
+
+        let copied = false;
+        try {
+          if (navigator.clipboard && navigator.clipboard.writeText) {
+            await navigator.clipboard.writeText(composed);
+            copied = true;
+          }
+        } catch {
+          copied = false;
+        }
+
+        try {
+          sessionStorage.setItem(
+            "stem_fb_feedback_draft",
+            JSON.stringify({ name, text, kind, at: Date.now() })
+          );
+        } catch {
+          /* private mode */
+        }
+
+        const hint = document.getElementById("fb-feedback-copy-hint");
+        if (hint) {
+          hint.classList.remove("hidden");
+          hint.textContent = copied
+            ? "Message copied. Paste it on Facebook, then tap “I posted on Facebook”."
+            : "Post your message on Facebook, then tap “I posted on Facebook”.";
+        }
+
+        window.open(pageUrl, "_blank", "noopener,noreferrer");
+        toast(
+          copied
+            ? "Message copied — paste on Facebook, then confirm here."
+            : "Facebook opened — post your comment, then confirm here."
+        );
+      };
+    }
+
+    const feedbackConfirm = document.getElementById("fb-feedback-confirm");
+    if (feedbackConfirm) {
+      feedbackConfirm.onclick = async () => {
+        const name = (document.getElementById("fb-feedback-name")?.value || "").trim();
+        const text = (document.getElementById("fb-feedback-text")?.value || "").trim();
+        const kind = (document.getElementById("fb-feedback-kind")?.value || "comment").trim();
+        if (!text) {
+          toast("Write your message first, then post it on Facebook.", true);
+          return;
+        }
+        feedbackConfirm.disabled = true;
+        try {
+          const profile = await Api.claimFacebookEngagement(token(), {
+            kind,
+            display_name: name,
+            text,
+          });
+          state.profile = profile;
+          ProfileCache.set(profile, { noticesLoaded: false });
+          toast("Thanks! Your 3‑month ad-free check-in is recorded.");
+          feedbackConfirm.classList.add("hidden");
+          feedbackConfirm.setAttribute("hidden", "hidden");
+          const openBtn = document.getElementById("fb-feedback-btn");
+          if (openBtn) {
+            openBtn.classList.add("hidden");
+            openBtn.setAttribute("hidden", "hidden");
+          }
+          const ta = document.getElementById("fb-feedback-text");
+          const kindEl = document.getElementById("fb-feedback-kind");
+          if (ta) ta.disabled = true;
+          if (kindEl) kindEl.disabled = true;
+          const actions = document.getElementById("fb-feedback-actions");
+          if (actions && !document.getElementById("fb-feedback-done")) {
+            const done = document.createElement("p");
+            done.id = "fb-feedback-done";
+            done.className = "muted";
+            done.style.margin = "0.5rem 0 0";
+            done.textContent = `✓ Check-in recorded. Next by ${formatAccountDate(profile.next_engagement_due_at)}.`;
+            actions.appendChild(done);
+          }
+        } catch (err) {
+          toast(err.message || String(err), true);
+          feedbackConfirm.disabled = false;
+        }
+      };
     }
   }
 
@@ -3337,6 +3681,7 @@ const App = (() => {
       case "insights": html = await viewInsights(); break;
       case "account": html = await viewAccount(); break;
       case "profile": html = await viewProfile(); break;
+      case "facebook": html = await viewFacebook(); break;
       case "admin": html = await viewAdmin(); break;
       case "pay": html = viewPaywall(); break;
       case "home":
@@ -3357,6 +3702,9 @@ const App = (() => {
     }
     if (state.route === "profile") {
       bindProfileForm();
+    }
+    if (state.route === "facebook") {
+      bindFacebookPage();
     }
     if (state.route === "study" && !state.studyPhase) {
       focusStudyLevelIfNeeded();
