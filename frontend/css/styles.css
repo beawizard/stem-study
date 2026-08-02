@@ -419,6 +419,25 @@ input:focus, textarea:focus, select:focus {
   border-color: var(--brand);
 }
 
+/* Login: forgot password link under password field */
+.auth-forgot-wrap {
+  margin: 0.4rem 0 0 !important;
+  text-align: right;
+  font-size: 0.9rem;
+}
+.auth-forgot-wrap a {
+  color: var(--brand);
+  font-weight: 600;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+.auth-forgot-wrap a:hover {
+  color: var(--brand-dark);
+}
+.auth-forgot-wrap.hidden {
+  display: none !important;
+}
+
 /* Sign-up: request missing school */
 .school-request-hint {
   margin: 0.35rem 0 0 !important;

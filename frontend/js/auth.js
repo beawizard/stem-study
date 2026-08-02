@@ -107,6 +107,40 @@ const Auth = (() => {
     });
   }
 
+  /** Step 1: email a password-reset code (Cognito ForgotPassword). */
+  function forgotPassword(email) {
+    return new Promise((resolve, reject) => {
+      const user = new AmazonCognitoIdentity.CognitoUser({
+        Username: String(email || "").trim().toLowerCase(),
+        Pool: getUserPool(),
+      });
+      user.forgotPassword({
+        onSuccess(data) {
+          resolve(data || { delivery: "code_sent" });
+        },
+        onFailure: reject,
+        // Library calls this instead of onSuccess when defined; still means code was sent.
+        inputVerificationCode(data) {
+          resolve(data || { delivery: "code_sent" });
+        },
+      });
+    });
+  }
+
+  /** Step 2: confirm code + new password. */
+  function confirmForgotPassword(email, code, newPassword) {
+    return new Promise((resolve, reject) => {
+      const user = new AmazonCognitoIdentity.CognitoUser({
+        Username: String(email || "").trim().toLowerCase(),
+        Pool: getUserPool(),
+      });
+      user.confirmPassword(String(code || "").trim(), newPassword, {
+        onSuccess: resolve,
+        onFailure: reject,
+      });
+    });
+  }
+
   function signOut() {
     clearSession();
     try {
@@ -166,6 +200,8 @@ const Auth = (() => {
     signUp,
     confirm,
     signIn,
+    forgotPassword,
+    confirmForgotPassword,
     signOut,
     getIdToken,
     isLoggedIn,

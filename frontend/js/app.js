@@ -752,11 +752,48 @@ const App = (() => {
     return opts.join("");
   }
 
+  /** Fixed grade levels for Sign up and Profile comboboxes (order fixed). */
+  const GRADE_LEVELS = [
+    "Kindergarten",
+    "Grade 1",
+    "Grade 2",
+    "Grade 3",
+    "Grade 4",
+    "Grade 5",
+    "Grade 6",
+    "Grade 7",
+    "Grade 8",
+    "Grade 9",
+    "Grade 10",
+    "Grade 11",
+    "Grade 12",
+  ];
+
+  function gradeSelectOptionsHtml(selectedGrade) {
+    const selected = String(selectedGrade || "").trim();
+    const opts = [`<option value="">Select grade…</option>`];
+    let matched = false;
+    for (const g of GRADE_LEVELS) {
+      const isSel = g === selected;
+      if (isSel) matched = true;
+      opts.push(
+        `<option value="${escapeAttr(g)}" ${isSel ? "selected" : ""}>${escapeHtml(g)}</option>`
+      );
+    }
+    // Preserve legacy free-text grades until the user picks a standard value
+    if (selected && !matched) {
+      opts.push(
+        `<option value="${escapeAttr(selected)}" selected>${escapeHtml(selected)} (current)</option>`
+      );
+    }
+    return opts.join("");
+  }
+
   function viewAuth() {
     return `
       <div class="card">
-        <h1>Welcome</h1>
-        <p class="muted">Sign up for free. Study available topics at your own pace. When your profile is not active for 6 months, it may be deleted to save resources.</p>
+        <h1 id="auth-title">Welcome</h1>
+        <p id="auth-subtitle" class="muted">Sign up for free. Study available topics at your own pace. When your profile is not active for 6 months, it may be deleted to save resources.</p>
         <div class="tabs">
           <button type="button" id="tab-login" class="active">Log in</button>
           <button type="button" id="tab-signup">Sign up</button>
@@ -783,11 +820,12 @@ const App = (() => {
           </div>
           <div id="grade-wrap" class="hidden">
             <label for="signup-grade">Grade</label>
-            <input id="signup-grade" type="text" maxlength="40"
-              placeholder="e.g. Grade 3" autocomplete="off" />
+            <select id="signup-grade" autocomplete="off">
+              ${gradeSelectOptionsHtml("")}
+            </select>
           </div>
-          <div>
-            <label for="password">Password</label>
+          <div id="password-wrap">
+            <label for="password" id="password-label">Password</label>
             <div class="password-field">
               <input id="password" type="password" autocomplete="current-password" required minlength="8" />
               <button type="button" class="password-toggle" data-toggle-password="password"
@@ -796,6 +834,9 @@ const App = (() => {
                 <span class="icon-eye-off hidden" aria-hidden="true">${eyeIconOff()}</span>
               </button>
             </div>
+            <p class="auth-forgot-wrap">
+              <a href="#" id="forgot-password-link">Forgot password?</a>
+            </p>
           </div>
           <div id="password-confirm-wrap" class="hidden">
             <label for="password-confirm">Confirm password</label>
@@ -810,12 +851,14 @@ const App = (() => {
             <p id="password-match-hint" class="muted" aria-live="polite"></p>
           </div>
           <div id="code-wrap" class="hidden">
-            <label for="code">Email confirmation code</label>
+            <label for="code" id="code-label">Email confirmation code</label>
             <input id="code" type="text" inputmode="numeric" autocomplete="one-time-code" />
-            <p class="muted">Check your email after sign-up, then enter the code and tap Confirm email.</p>
+            <p id="code-hint" class="muted">Check your email after sign-up, then enter the code and tap Confirm email.</p>
           </div>
+          <p id="forgot-hint" class="muted hidden" aria-live="polite"></p>
           <button class="btn block" type="submit" id="auth-submit">Log in</button>
           <button class="btn secondary block hidden" type="button" id="auth-confirm">Confirm email</button>
+          <button class="btn secondary block hidden" type="button" id="auth-back-login">Back to log in</button>
         </form>
       </div>
       <!-- Modal must stay outside #auth-form (nested forms break validation / submit) -->
@@ -2303,9 +2346,7 @@ const App = (() => {
           </div>
           <div>
             <label for="profile-grade">Grade</label>
-            <input id="profile-grade" type="text" maxlength="40"
-              value="${escapeAttr(p.grade || "")}"
-              placeholder="e.g. Grade 3" />
+            <select id="profile-grade">${gradeSelectOptionsHtml(p.grade || "")}</select>
           </div>
           <button class="btn block" type="submit" id="profile-save">Save</button>
         </form>
@@ -3787,16 +3828,24 @@ const App = (() => {
   }
 
   function bindAuth() {
-    let mode = "login";
+    let mode = "login"; // login | signup | forgot | reset
     const tabLogin = document.getElementById("tab-login");
     const tabSignup = document.getElementById("tab-signup");
     const submit = document.getElementById("auth-submit");
     const confirmBtn = document.getElementById("auth-confirm");
+    const backLoginBtn = document.getElementById("auth-back-login");
+    const passwordWrap = document.getElementById("password-wrap");
     const passwordEl = document.getElementById("password");
+    const passwordLabel = document.getElementById("password-label");
     const passwordConfirmWrap = document.getElementById("password-confirm-wrap");
     const passwordConfirmEl = document.getElementById("password-confirm");
     const matchHint = document.getElementById("password-match-hint");
     const codeWrap = document.getElementById("code-wrap");
+    const codeLabel = document.getElementById("code-label");
+    const codeHint = document.getElementById("code-hint");
+    const forgotHint = document.getElementById("forgot-hint");
+    const forgotLink = document.getElementById("forgot-password-link");
+    const forgotLinkWrap = forgotLink && forgotLink.closest(".auth-forgot-wrap");
     const emailEl = document.getElementById("email");
     const nicknameWrap = document.getElementById("nickname-wrap");
     const nicknameEl = document.getElementById("nickname");
@@ -3804,6 +3853,20 @@ const App = (() => {
     const schoolEl = document.getElementById("signup-school");
     const gradeWrap = document.getElementById("grade-wrap");
     const gradeEl = document.getElementById("signup-grade");
+    const tabsEl = document.querySelector(".tabs");
+    const authTitle = document.getElementById("auth-title");
+    const authSubtitle = document.getElementById("auth-subtitle");
+    const AUTH_TITLE_DEFAULT = "Welcome";
+    const AUTH_SUBTITLE_DEFAULT =
+      "Sign up for free. Study available topics at your own pace. When your profile is not active for 6 months, it may be deleted to save resources.";
+    const AUTH_TITLE_RESET = "Change Password";
+    const AUTH_SUBTITLE_RESET =
+      "After initiating password change, check your email including spam folder for the code.";
+
+    function setAuthHeading(title, subtitle) {
+      if (authTitle) authTitle.textContent = title;
+      if (authSubtitle) authSubtitle.textContent = subtitle;
+    }
 
     // Pending school requested in this session (not in public catalog until approved)
     let pendingTempSchool = null; // { school_id, label }
@@ -3986,19 +4049,30 @@ const App = (() => {
     });
 
     function updateSignupButtonState() {
-      if (mode !== "signup") {
+      if (mode === "login" || mode === "forgot") {
         submit.disabled = false;
-        if (matchHint) matchHint.textContent = "";
+        if (matchHint && mode === "login") matchHint.textContent = "";
+        return;
+      }
+      if (mode !== "signup" && mode !== "reset") {
+        submit.disabled = false;
         return;
       }
       const password = passwordEl.value;
       const confirm = passwordConfirmEl.value;
       const emailOk = emailEl.value.trim().length > 0 && emailEl.checkValidity();
-      const nicknameOk = nicknameEl && nicknameEl.value.trim().length > 0;
-      const schoolOk = schoolEl && schoolEl.value.trim().length > 0;
-      const gradeOk = gradeEl && gradeEl.value.trim().length > 0;
+      const nicknameOk =
+        mode === "reset" ? true : nicknameEl && nicknameEl.value.trim().length > 0;
+      const schoolOk =
+        mode === "reset" ? true : schoolEl && schoolEl.value.trim().length > 0;
+      const gradeOk =
+        mode === "reset" ? true : gradeEl && gradeEl.value.trim().length > 0;
       const policyOk = passwordPolicyOk(password);
       const match = password.length > 0 && password === confirm;
+      const codeOk =
+        mode !== "reset" ||
+        (document.getElementById("code") &&
+          document.getElementById("code").value.trim().length > 0);
 
       if (!password && !confirm) {
         matchHint.textContent = "Use 8+ chars with upper, lower, number, and symbol.";
@@ -4014,8 +4088,18 @@ const App = (() => {
         matchHint.style.color = "var(--ok)";
       }
 
-      // Enable Sign up when email, nickname, school, grade, policy, and passwords match
-      submit.disabled = !(emailOk && nicknameOk && schoolOk && gradeOk && policyOk && match);
+      if (mode === "reset") {
+        submit.disabled = !(emailOk && codeOk && policyOk && match);
+      } else {
+        submit.disabled = !(
+          emailOk &&
+          nicknameOk &&
+          schoolOk &&
+          gradeOk &&
+          policyOk &&
+          match
+        );
+      }
     }
 
     function resetPasswordVisibility() {
@@ -4028,42 +4112,62 @@ const App = (() => {
       });
     }
 
+    function hideSignupExtras() {
+      if (nicknameWrap) nicknameWrap.classList.add("hidden");
+      if (nicknameEl) {
+        nicknameEl.required = false;
+      }
+      if (schoolWrap) schoolWrap.classList.add("hidden");
+      if (schoolEl) schoolEl.required = false;
+      if (gradeWrap) gradeWrap.classList.add("hidden");
+      if (gradeEl) gradeEl.required = false;
+    }
+
     function setLoginMode() {
       mode = "login";
+      setAuthHeading(AUTH_TITLE_DEFAULT, AUTH_SUBTITLE_DEFAULT);
+      if (tabsEl) tabsEl.classList.remove("hidden");
       tabLogin.classList.add("active");
       tabSignup.classList.remove("active");
       submit.textContent = "Log in";
       submit.disabled = false;
+      submit.classList.remove("hidden");
+      if (passwordWrap) passwordWrap.classList.remove("hidden");
+      if (passwordLabel) passwordLabel.textContent = "Password";
+      passwordEl.required = true;
       passwordEl.autocomplete = "current-password";
       passwordConfirmWrap.classList.add("hidden");
       passwordConfirmEl.required = false;
       passwordConfirmEl.value = "";
-      if (nicknameWrap) nicknameWrap.classList.add("hidden");
-      if (nicknameEl) {
-        nicknameEl.required = false;
-        nicknameEl.value = "";
-      }
-      if (schoolWrap) schoolWrap.classList.add("hidden");
-      if (schoolEl) {
-        schoolEl.required = false;
-        schoolEl.value = "";
-      }
-      if (gradeWrap) gradeWrap.classList.add("hidden");
-      if (gradeEl) {
-        gradeEl.required = false;
-        gradeEl.value = "";
-      }
+      hideSignupExtras();
       codeWrap.classList.add("hidden");
       confirmBtn.classList.add("hidden");
+      if (backLoginBtn) backLoginBtn.classList.add("hidden");
+      if (forgotLinkWrap) forgotLinkWrap.classList.remove("hidden");
+      if (forgotHint) {
+        forgotHint.classList.add("hidden");
+        forgotHint.textContent = "";
+      }
+      if (codeLabel) codeLabel.textContent = "Email confirmation code";
+      if (codeHint) {
+        codeHint.textContent =
+          "Check your email after sign-up, then enter the code and tap Confirm email.";
+      }
       if (matchHint) matchHint.textContent = "";
       resetPasswordVisibility();
     }
 
     function setSignupMode() {
       mode = "signup";
+      setAuthHeading(AUTH_TITLE_DEFAULT, AUTH_SUBTITLE_DEFAULT);
+      if (tabsEl) tabsEl.classList.remove("hidden");
       tabSignup.classList.add("active");
       tabLogin.classList.remove("active");
       submit.textContent = "Sign up";
+      submit.classList.remove("hidden");
+      if (passwordWrap) passwordWrap.classList.remove("hidden");
+      if (passwordLabel) passwordLabel.textContent = "Password";
+      passwordEl.required = true;
       passwordEl.autocomplete = "new-password";
       passwordConfirmWrap.classList.remove("hidden");
       passwordConfirmEl.required = true;
@@ -4074,15 +4178,95 @@ const App = (() => {
       if (gradeWrap) gradeWrap.classList.remove("hidden");
       if (gradeEl) gradeEl.required = true;
       loadSignupSchools();
-      // Code + confirm-email shown after successful sign-up
       codeWrap.classList.add("hidden");
       confirmBtn.classList.add("hidden");
+      if (backLoginBtn) backLoginBtn.classList.add("hidden");
+      if (forgotLinkWrap) forgotLinkWrap.classList.add("hidden");
+      if (forgotHint) {
+        forgotHint.classList.add("hidden");
+        forgotHint.textContent = "";
+      }
+      if (codeLabel) codeLabel.textContent = "Email confirmation code";
+      if (codeHint) {
+        codeHint.textContent =
+          "Check your email after sign-up, then enter the code and tap Confirm email.";
+      }
+      resetPasswordVisibility();
+      updateSignupButtonState();
+    }
+
+    /** Request a Cognito reset code (step 1). */
+    function setForgotMode() {
+      mode = "forgot";
+      setAuthHeading(AUTH_TITLE_RESET, AUTH_SUBTITLE_RESET);
+      if (tabsEl) tabsEl.classList.add("hidden");
+      hideSignupExtras();
+      if (passwordWrap) passwordWrap.classList.add("hidden");
+      passwordEl.required = false;
+      passwordConfirmWrap.classList.add("hidden");
+      passwordConfirmEl.required = false;
+      codeWrap.classList.add("hidden");
+      confirmBtn.classList.add("hidden");
+      if (backLoginBtn) backLoginBtn.classList.remove("hidden");
+      if (forgotLinkWrap) forgotLinkWrap.classList.add("hidden");
+      if (forgotHint) {
+        forgotHint.classList.remove("hidden");
+        forgotHint.textContent =
+          "Enter your account email. We will send a verification code to reset your password.";
+      }
+      submit.textContent = "Send reset code";
+      submit.disabled = false;
+      submit.classList.remove("hidden");
+      resetPasswordVisibility();
+    }
+
+    /** Enter code + new password (step 2). */
+    function setResetMode() {
+      mode = "reset";
+      setAuthHeading(AUTH_TITLE_RESET, AUTH_SUBTITLE_RESET);
+      if (tabsEl) tabsEl.classList.add("hidden");
+      hideSignupExtras();
+      if (passwordWrap) passwordWrap.classList.remove("hidden");
+      if (passwordLabel) passwordLabel.textContent = "New password";
+      passwordEl.required = true;
+      passwordEl.value = "";
+      passwordEl.autocomplete = "new-password";
+      passwordConfirmWrap.classList.remove("hidden");
+      passwordConfirmEl.required = true;
+      passwordConfirmEl.value = "";
+      codeWrap.classList.remove("hidden");
+      if (codeLabel) codeLabel.textContent = "Reset code from email";
+      if (codeHint) {
+        codeHint.textContent =
+          "Enter the code from your email, then choose a new password.";
+      }
+      const codeEl = document.getElementById("code");
+      if (codeEl) codeEl.value = "";
+      confirmBtn.classList.add("hidden");
+      if (backLoginBtn) backLoginBtn.classList.remove("hidden");
+      if (forgotLinkWrap) forgotLinkWrap.classList.add("hidden");
+      if (forgotHint) {
+        forgotHint.classList.remove("hidden");
+        forgotHint.textContent = "Almost done — set your new password below.";
+      }
+      submit.textContent = "Set new password";
+      submit.classList.remove("hidden");
       resetPasswordVisibility();
       updateSignupButtonState();
     }
 
     tabLogin.onclick = setLoginMode;
     tabSignup.onclick = setSignupMode;
+
+    if (forgotLink) {
+      forgotLink.onclick = (e) => {
+        e.preventDefault();
+        setForgotMode();
+      };
+    }
+    if (backLoginBtn) {
+      backLoginBtn.onclick = () => setLoginMode();
+    }
 
     // Show / hide password toggles (eye icons on Password + Confirm password)
     document.querySelectorAll("[data-toggle-password]").forEach((btn) => {
@@ -4097,10 +4281,12 @@ const App = (() => {
       });
     });
 
+    const codeEl = document.getElementById("code");
     ["input", "change"].forEach((evt) => {
       emailEl.addEventListener(evt, updateSignupButtonState);
       passwordEl.addEventListener(evt, updateSignupButtonState);
       passwordConfirmEl.addEventListener(evt, updateSignupButtonState);
+      if (codeEl) codeEl.addEventListener(evt, updateSignupButtonState);
       if (nicknameEl) nicknameEl.addEventListener(evt, updateSignupButtonState);
       if (schoolEl) schoolEl.addEventListener(evt, updateSignupButtonState);
       if (gradeEl) gradeEl.addEventListener(evt, updateSignupButtonState);
@@ -4128,6 +4314,45 @@ const App = (() => {
             }
             throw loginErr;
           }
+        } else if (mode === "forgot") {
+          if (!email || !emailEl.checkValidity()) {
+            toast("Enter a valid email address.", true);
+            return;
+          }
+          submit.disabled = true;
+          const delivery = await Auth.forgotPassword(email);
+          const dest =
+            (delivery &&
+              delivery.CodeDeliveryDetails &&
+              delivery.CodeDeliveryDetails.Destination) ||
+            "";
+          toast(
+            dest
+              ? `Reset code sent to ${dest}. Check Inbox and Spam/Junk (sender may be Cognito/Amazon).`
+              : "Reset code sent if the email is registered. Check Inbox and Spam/Junk."
+          );
+          if (forgotHint) {
+            forgotHint.classList.remove("hidden");
+            forgotHint.textContent = dest
+              ? `Code delivered to ${dest}. Also check Spam. Then enter the code and a new password.`
+              : "Check your email (including Spam). Then enter the code and a new password.";
+          }
+          setResetMode();
+        } else if (mode === "reset") {
+          const code = (document.getElementById("code")?.value || "").trim();
+          if (!code) {
+            toast("Enter the reset code from your email.", true);
+            return;
+          }
+          if (!passwordPolicyOk(password) || password !== passwordConfirmEl.value) {
+            updateSignupButtonState();
+            toast("Passwords must match and meet the policy.", true);
+            return;
+          }
+          submit.disabled = true;
+          await Auth.confirmForgotPassword(email, code, password);
+          toast("Password updated. You can log in with your new password.");
+          setLoginMode();
         } else {
           const nickname = nicknameEl ? nicknameEl.value.trim() : "";
           const schoolId = schoolEl ? schoolEl.value.trim() : "";
@@ -4143,7 +4368,7 @@ const App = (() => {
             return;
           }
           if (!grade) {
-            toast("Please enter a grade.", true);
+            toast("Please select a grade.", true);
             updateSignupButtonState();
             return;
           }
@@ -4169,7 +4394,8 @@ const App = (() => {
         }
       } catch (err) {
         toast(err.message || String(err), true);
-        if (mode === "signup") updateSignupButtonState();
+        if (mode === "signup" || mode === "reset") updateSignupButtonState();
+        else submit.disabled = false;
       }
     };
 
