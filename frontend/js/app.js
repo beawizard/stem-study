@@ -659,8 +659,16 @@ const App = (() => {
       if (!notices.length) return;
       const mainEl = main();
       if (!mainEl) return;
-      // Re-render Home quietly (profile already in memory)
-      mainEl.innerHTML = viewHome();
+      // Re-render Home quietly; keep leaderboard populated
+      let boardEntries = [];
+      try {
+        const board = await Api.leaderboard(token(), { limit: 10 });
+        boardEntries = board.entries || [];
+      } catch {
+        boardEntries = [];
+      }
+      if (state.route !== "home") return;
+      mainEl.innerHTML = viewHome(boardEntries);
       updateNavProfileAvatar();
       bindView();
     }, 0);
@@ -908,7 +916,42 @@ const App = (() => {
     return learnerNickname(p);
   }
 
-  function viewHome() {
+  function leaderboardTableHtml(entries) {
+    const rows = Array.isArray(entries) ? entries : [];
+    if (!rows.length) {
+      return `<p class="muted leaderboard-empty">No rankings yet. Complete a set to earn XP from your speed badge!</p>`;
+    }
+    const body = rows
+      .map((e) => {
+        const rank = e.rank != null ? e.rank : "—";
+        const name = e.name || "Learner";
+        const xp = e.xp != null ? e.xp : 0;
+        const grade = e.grade || "—";
+        return `<tr>
+          <td class="lb-rank">${escapeHtml(String(rank))}</td>
+          <td class="lb-name">${escapeHtml(String(name))}</td>
+          <td class="lb-xp">${escapeHtml(String(xp))}</td>
+          <td class="lb-grade">${escapeHtml(String(grade))}</td>
+        </tr>`;
+      })
+      .join("");
+    return `
+      <div class="table-wrap leaderboard-wrap">
+        <table class="leaderboard-table" aria-label="Top 10 leaderboard">
+          <thead>
+            <tr>
+              <th scope="col">Rank</th>
+              <th scope="col">Name</th>
+              <th scope="col">XP</th>
+              <th scope="col">Grade</th>
+            </tr>
+          </thead>
+          <tbody>${body}</tbody>
+        </table>
+      </div>`;
+  }
+
+  function viewHome(leaderboardEntries) {
     const p = state.profile || {};
     const name = learnerNickname(p);
     return `
@@ -928,6 +971,11 @@ const App = (() => {
         <p>1. Take an <strong>Assessment</strong> to find your best starting level, or open Study to pick a set.</p>
         <p>2. Answer questions — accuracy &amp; speed unlock insights.</p>
         <p>3. Complete any set of Level N to unlock Level N+1 (you need not finish every variation of N).</p>
+      </div>
+      <div class="card leaderboard-card">
+        <h2>Leaderboard</h2>
+        <p class="muted leaderboard-hint">XP from set badges: Legendary Wizard 5 · Superb Advanced 3 · Cool Novice 1</p>
+        ${leaderboardTableHtml(leaderboardEntries)}
       </div>`;
   }
 
@@ -2280,9 +2328,9 @@ const App = (() => {
       ${contentNoticesHtml(p.content_notices)}`;
   }
 
-  /** Profile page — editable Name, School, Grade. */
+  /** Profile page — editable Name, School, Grade + XP / Rank. */
   async function viewProfile() {
-    await refreshProfile({ skipIfFresh: true, notices: false });
+    await refreshProfile({ force: true, notices: false });
     updateNavProfileAvatar();
     const p = state.profile || {};
     const name = learnerDisplayName(p);
@@ -2296,6 +2344,10 @@ const App = (() => {
             <circle cx="12" cy="8" r="3.5" fill="currentColor"/>
             <path fill="currentColor" d="M5.5 19.2c.6-3.2 3.2-5.2 6.5-5.2s5.9 2 6.5 5.2c.1.5-.3 1-.8 1H6.3c-.5 0-.9-.5-.8-1z"/>
           </svg>`;
+
+    const xpVal = p.xp != null ? Number(p.xp) : 0;
+    const rankVal = p.rank != null ? Number(p.rank) : null;
+    const rankLabel = rankVal != null && Number.isFinite(rankVal) ? `#${rankVal}` : "—";
 
     let schools = [];
     try {
@@ -2325,9 +2377,23 @@ const App = (() => {
 
     return `
       <div class="card">
-        <h1>Profile</h1>
-        <div class="profile-avatar-lg" aria-hidden="true">${avatarInner}</div>
-        <p class="muted" style="margin-bottom:0.85rem">${escapeHtml(p.email || "")}</p>
+        <div class="profile-header">
+          <div class="profile-header-main">
+            <h1>Profile</h1>
+            <div class="profile-avatar-lg" aria-hidden="true">${avatarInner}</div>
+            <p class="muted" style="margin-bottom:0.85rem">${escapeHtml(p.email || "")}</p>
+          </div>
+          <div class="profile-xp-card" aria-label="Leaderboard stats">
+            <div class="profile-xp-stat">
+              <span class="profile-xp-label">XP</span>
+              <span class="profile-xp-value">${escapeHtml(String(Number.isFinite(xpVal) ? xpVal : 0))}</span>
+            </div>
+            <div class="profile-xp-stat">
+              <span class="profile-xp-label">Rank</span>
+              <span class="profile-xp-value">${escapeHtml(rankLabel)}</span>
+            </div>
+          </div>
+        </div>
         <form id="profile-form" class="stack">
           <div>
             <label for="profile-nickname">Name / Nickname</label>
@@ -3731,7 +3797,14 @@ const App = (() => {
         // H2: paint without notices first; scheduleHomeNoticesRefresh after
         await refreshProfile({ skipIfFresh: true, notices: false });
         updateNavProfileAvatar();
-        html = viewHome();
+        let boardEntries = [];
+        try {
+          const board = await Api.leaderboard(token(), { limit: 10 });
+          boardEntries = board.entries || [];
+        } catch {
+          boardEntries = [];
+        }
+        html = viewHome(boardEntries);
         break;
     }
     el.innerHTML = html;

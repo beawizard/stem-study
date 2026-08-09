@@ -64,6 +64,12 @@ const Api = (() => {
     },
     updateMe: (token, body) =>
       request("/me", { method: "PATCH", body, token }),
+    /** Top learners by XP (Rank, Name, XP, Grade). Default limit 10. */
+    leaderboard: (token, opts = {}) => {
+      const limit = opts && opts.limit != null ? Number(opts.limit) : 10;
+      const q = Number.isFinite(limit) ? `?limit=${Math.max(1, Math.min(limit, 50))}` : "";
+      return request(`/leaderboard${q}`, { token });
+    },
     /** Honor-system: claim Facebook Follow → 6 months free subscription. */
     claimFacebookFollow: (token, body) =>
       request("/me/facebook/follow", { method: "POST", body, token }),

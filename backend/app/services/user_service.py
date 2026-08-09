@@ -13,6 +13,17 @@ FB_FOLLOW_SUBSCRIPTION_DAYS = 180  # 6 months
 # Comment / feedback on FB every N days keeps ads suppressed (ad banner not built yet)
 FB_ENGAGEMENT_AD_FREE_DAYS = 90  # 3 months
 
+# Leaderboard XP from best speed badge per completed set (Category/Topic/Level)
+XP_LEGENDARY = 5  # Legendary Wizard
+XP_ADVANCED = 3  # Superb Advanced
+XP_NOVICE = 1  # Cool Novice
+XP_POINTS = {
+    "legendary_wizard": XP_LEGENDARY,
+    "superb_advanced": XP_ADVANCED,
+    "cool_novice": XP_NOVICE,
+}
+LEADERBOARD_TOP_N = 10
+
 
 def _utcnow() -> datetime:
     return datetime.now(timezone.utc)
@@ -401,8 +412,140 @@ def record_study_session(
     return db.update_item(keys.user_pk(user_id), keys.user_meta_sk(), updates)
 
 
+def xp_points_for_badge(badge: str | None) -> int:
+    """Map a speed badge id to leaderboard XP points."""
+    if not badge:
+        return 0
+    return int(XP_POINTS.get(str(badge).strip(), 0))
+
+
+def compute_xp_from_progress(user_id: str) -> int:
+    """Sum XP from best speed badge on each completed set (progress row).
+
+    Legendary Wizard = 5, Superb Advanced = 3, Cool Novice = 1.
+    Uses stored badge when present; otherwise derives from best elapsed time
+    (same rules as Insights) so pre-badge completions still count.
+    """
+    from app.services.study_service import resolve_progress_badge
+
+    items = db.query_pk(keys.user_pk(user_id), sk_begins_with="PROGRESS#")
+    total = 0
+    for item in items:
+        if item.get("deleted_at"):
+            continue
+        if item.get("status") != "completed":
+            continue
+        badge, _, _ = resolve_progress_badge(item)
+        total += xp_points_for_badge(badge)
+    return total
+
+
+def refresh_user_xp(user_id: str) -> dict[str, Any]:
+    """Recompute cumulative XP from all completed sets and update profile + GSI.
+
+    Called after each exam (study session complete) so the leaderboard stays current.
+    """
+    profile = get_profile(user_id) or ensure_user_profile(user_id)
+    xp = compute_xp_from_progress(user_id)
+    now = _iso(_utcnow())
+    updates: dict[str, Any] = {
+        "xp": int(xp),
+        "xp_updated_at": now,
+        "GSI1PK": keys.ENTITY_LEADERBOARD,
+        "GSI1SK": keys.leaderboard_gsi1_sk(xp, user_id),
+        "updated_at": now,
+    }
+    return db.update_item(keys.user_pk(user_id), keys.user_meta_sk(), updates)
+
+
+def ensure_user_xp(profile: dict[str, Any]) -> dict[str, Any]:
+    """If profile has never stored XP, compute once from existing progress."""
+    if profile is None:
+        return profile
+    if profile.get("xp") is not None:
+        return profile
+    uid = profile.get("user_id")
+    if not uid:
+        return profile
+    return refresh_user_xp(uid)
+
+
+def rank_for_xp(xp: int, user_id: str | None = None) -> int | None:
+    """1-based rank among learners on the leaderboard GSI (higher XP first).
+
+    Order matches list_leaderboard (inverted XP GSI, then user_id). If the
+    learner is not yet on the index, rank is 1 + count of people with higher XP.
+    """
+    try:
+        xp_i = max(0, int(xp or 0))
+    except (TypeError, ValueError):
+        xp_i = 0
+
+    entries = db.query_gsi1(keys.ENTITY_LEADERBOARD)
+    rank = 0
+    for item in entries:
+        if item.get("deleted_at"):
+            continue
+        if item.get("entity_type") and item.get("entity_type") != "USER":
+            continue
+        rank += 1
+        if user_id and item.get("user_id") == user_id:
+            return rank
+    # Not indexed yet — place after everyone with strictly more XP
+    higher = 0
+    for item in entries:
+        if item.get("deleted_at"):
+            continue
+        try:
+            other_xp = int(item.get("xp") or 0)
+        except (TypeError, ValueError):
+            other_xp = 0
+        if other_xp > xp_i:
+            higher += 1
+    return higher + 1
+
+
+def list_leaderboard(limit: int = LEADERBOARD_TOP_N) -> list[dict[str, Any]]:
+    """Top N learners by XP (Rank, Name, XP, Grade)."""
+    n = max(1, min(int(limit or LEADERBOARD_TOP_N), 50))
+    # Fetch a bit extra in case of soft-deleted / incomplete rows
+    raw = db.query_gsi1(keys.ENTITY_LEADERBOARD, limit=n * 3)
+    rows: list[dict[str, Any]] = []
+    for item in raw:
+        if item.get("deleted_at"):
+            continue
+        if item.get("entity_type") and item.get("entity_type") != "USER":
+            continue
+        try:
+            xp = int(item.get("xp") or 0)
+        except (TypeError, ValueError):
+            xp = 0
+        nickname = (item.get("nickname") or "").strip()
+        name = nickname or (item.get("email") or "").split("@")[0] or "Learner"
+        grade = (item.get("grade") or "").strip() or "—"
+        rows.append(
+            {
+                "user_id": item.get("user_id"),
+                "name": name,
+                "xp": xp,
+                "grade": grade,
+            }
+        )
+        if len(rows) >= n:
+            break
+    for i, row in enumerate(rows, start=1):
+        row["rank"] = i
+    return rows
+
+
 def public_profile(profile: dict[str, Any], *, include_content_notices: bool = True) -> dict[str, Any]:
     """Strip internal keys for API response."""
+    # Lazy backfill XP for learners who completed sets before leaderboards shipped
+    if profile and profile.get("xp") is None and profile.get("user_id"):
+        try:
+            profile = ensure_user_xp(profile)
+        except Exception:
+            pass
     active = is_subscription_active(profile)
     nickname = (profile.get("nickname") or "").strip() or None
     school_id = (profile.get("school_id") or "").strip() or None
@@ -410,6 +553,16 @@ def public_profile(profile: dict[str, Any], *, include_content_notices: bool = T
     if school_id and not school_name:
         school_name = _resolve_school_name(school_id) or None
     grade = (profile.get("grade") or "").strip() or None
+    try:
+        xp = int(profile.get("xp") or 0)
+    except (TypeError, ValueError):
+        xp = 0
+    uid = profile.get("user_id")
+    rank: int | None = None
+    try:
+        rank = rank_for_xp(xp, uid)
+    except Exception:
+        rank = None
     fb = facebook_benefits_summary(profile)
     out = {
         "user_id": profile.get("user_id"),
@@ -419,6 +572,8 @@ def public_profile(profile: dict[str, Any], *, include_content_notices: bool = T
         "school_id": school_id,
         "school_name": school_name,
         "grade": grade,
+        "xp": xp,
+        "rank": rank,
         "created_at": profile.get("created_at"),
         "trial_ends_at": profile.get("trial_ends_at"),
         "subscription_status": profile.get("subscription_status"),

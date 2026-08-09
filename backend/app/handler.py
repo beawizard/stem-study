@@ -30,6 +30,7 @@ Routes (all require Cognito JWT unless noted):
   GET               /study/landing?subject_id=     (lightweight Study page payload)
   GET               /study/bootstrap?subject_id=   (subjects + landing, one round-trip)
   GET               /insights   (?notices=1 optional; default skips content_notices)
+  GET               /leaderboard                 (top 10 by XP: Rank, Name, XP, Grade)
   POST              /payments
   GET               /payments
   GET               /admin/payments              (admin)
@@ -208,6 +209,15 @@ def _route(
                 profile, include_content_notices=include_notices
             )
         )
+
+    if method == "GET" and path == "/leaderboard":
+        limit_raw = qs.get("limit") or "10"
+        try:
+            limit = int(limit_raw)
+        except (TypeError, ValueError):
+            limit = 10
+        entries = user_service.list_leaderboard(limit=limit)
+        return ok({"entries": entries, "limit": min(max(limit, 1), 50)})
 
     if method == "PATCH" and path == "/me":
         data = parse_body(ProfileUpdate, body)

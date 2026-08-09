@@ -163,11 +163,12 @@ def query_gsi1(
     *,
     sk_begins_with: str | None = None,
     limit: int | None = None,
+    scan_forward: bool = True,
 ) -> list[dict[str, Any]]:
     kwargs: dict[str, Any] = {
         "IndexName": "GSI1",
         "KeyConditionExpression": Key("GSI1PK").eq(gsi1pk),
-        "ScanIndexForward": True,
+        "ScanIndexForward": scan_forward,
     }
     if sk_begins_with:
         kwargs["KeyConditionExpression"] = Key("GSI1PK").eq(gsi1pk) & Key(

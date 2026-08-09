@@ -15,10 +15,13 @@ SCHOOL#<id>         / META                      school catalog (admin-managed)
 
 GSI1 (for admin listings / reverse lookups):
   GSI1PK = ENTITY#TASK | ENTITY#SUBJECT | ENTITY#PAYMENT | ENTITY#SCHOOL | ENTITY#LEVEL
+           | ENTITY#LEADERBOARD
   GSI1SK = created_at or subject order
   For LEVEL: GSI1SK = <subject_id>#<order zero-padded>#<level_id>
     (list_levels queries GSI1PK=ENTITY#LEVEL, begins_with subject_id# so
      question rows under SK LEVEL#…#Q# are never scanned)
+  For LEADERBOARD (USER META): GSI1SK = <inverted_xp:010d>#<user_id>
+    (ascending query returns highest XP first for Home top-10)
 """
 
 from __future__ import annotations
@@ -87,3 +90,13 @@ ENTITY_SUBJECT = "ENTITY#SUBJECT"
 ENTITY_PAYMENT = "ENTITY#PAYMENT"
 ENTITY_LEVEL = "ENTITY#LEVEL"
 ENTITY_SCHOOL = "ENTITY#SCHOOL"
+# Leaderboard: GSI1PK=ENTITY#LEADERBOARD, GSI1SK=<inverted_xp:010d>#<user_id>
+# (lower inverted sort key = higher XP so ascending GSI query returns top ranks first)
+ENTITY_LEADERBOARD = "ENTITY#LEADERBOARD"
+_LEADERBOARD_XP_PAD = 999_999_999
+
+
+def leaderboard_gsi1_sk(xp: int, user_id: str) -> str:
+    """GSI1SK for leaderboard: inverted XP so top scores sort first ascending."""
+    inv = _LEADERBOARD_XP_PAD - max(0, int(xp or 0))
+    return f"{inv:010d}#{user_id}"

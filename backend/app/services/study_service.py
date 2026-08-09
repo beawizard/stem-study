@@ -507,6 +507,11 @@ def complete_session(
         accuracy=accuracy,
         passed=passed,
     )
+    # Leaderboard XP is cumulative badge points; recompute after every exam
+    try:
+        user_service.refresh_user_xp(user_id)
+    except Exception:
+        pass
 
     recommendation = build_recommendation(
         accuracy=accuracy,
@@ -634,6 +639,12 @@ def submit_answer(
             answered=answered,
             speed_badge=speed_badge,
         )
+        try:
+            from app.services import user_service as _us
+
+            _us.refresh_user_xp(user_id)
+        except Exception:
+            pass
 
         recommendation = build_recommendation(
             accuracy=accuracy,

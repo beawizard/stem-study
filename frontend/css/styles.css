@@ -205,6 +205,51 @@ button { cursor: pointer; min-height: var(--tap); }
 }
 
 /* Profile page (avatar placeholder for future photo upload) */
+.profile-header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 0.75rem 1rem;
+  margin-bottom: 0.25rem;
+}
+.profile-header-main {
+  min-width: 0;
+  flex: 1 1 12rem;
+}
+.profile-header-main h1 {
+  margin-bottom: 0.5rem;
+}
+.profile-xp-card {
+  flex: 0 0 auto;
+  display: flex;
+  flex-direction: column;
+  gap: 0.45rem;
+  min-width: 6.5rem;
+  padding: 0.65rem 0.85rem;
+  border-radius: 12px;
+  background: linear-gradient(145deg, #ecfdf5, #e0f2fe);
+  border: 1px solid #99f6e4;
+  box-shadow: 0 2px 8px rgba(15, 118, 110, 0.08);
+}
+.profile-xp-stat {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  line-height: 1.15;
+}
+.profile-xp-label {
+  font-size: 0.7rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+.profile-xp-value {
+  font-size: 1.35rem;
+  font-weight: 800;
+  color: var(--brand-dark);
+}
 .profile-avatar-lg {
   width: 5.5rem;
   height: 5.5rem;
@@ -233,6 +278,63 @@ button { cursor: pointer; min-height: var(--tap); }
   font-weight: 800;
   color: var(--brand-dark);
 }
+
+/* Home leaderboard */
+.leaderboard-card h2 {
+  margin-bottom: 0.35rem;
+}
+.leaderboard-hint {
+  font-size: 0.82rem;
+  margin: 0 0 0.75rem !important;
+}
+.leaderboard-empty {
+  margin: 0.5rem 0 0 !important;
+}
+.leaderboard-wrap {
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+  margin: 0 -0.15rem;
+}
+.leaderboard-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.9rem;
+}
+.leaderboard-table th,
+.leaderboard-table td {
+  padding: 0.45rem 0.5rem;
+  text-align: left;
+  border-bottom: 1px solid var(--border);
+}
+.leaderboard-table th {
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--muted);
+  background: #f0fdfa;
+}
+.leaderboard-table tbody tr:last-child td {
+  border-bottom: 0;
+}
+.leaderboard-table .lb-rank {
+  width: 3rem;
+  font-weight: 800;
+  color: var(--brand-dark);
+}
+.leaderboard-table .lb-xp {
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+.leaderboard-table .lb-name {
+  max-width: 10rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.leaderboard-table tbody tr:nth-child(1) .lb-rank { color: #b45309; }
+.leaderboard-table tbody tr:nth-child(2) .lb-rank { color: #64748b; }
+.leaderboard-table tbody tr:nth-child(3) .lb-rank { color: #c2410c; }
 
 .main { max-width: 720px; margin: 0 auto; padding: 1rem 1rem 3rem; }
 
