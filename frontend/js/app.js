@@ -33,6 +33,8 @@ const App = (() => {
     assessmentBaseTopic: null,
     assessmentSubjectId: null, // representative subject_id in the base-topic group
     assessmentPreview: null,
+    /** Cached Home leaderboard rows for CSV download */
+    leaderboardEntries: [],
   };
 
   /**
@@ -916,10 +918,70 @@ const App = (() => {
     return learnerNickname(p);
   }
 
-  function leaderboardTableHtml(entries) {
+  function leaderboardCsvEscape(value) {
+    const s = value == null ? "" : String(value);
+    if (/[",\n\r]/.test(s)) return `"${s.replace(/"/g, '""')}"`;
+    return s;
+  }
+
+  function downloadLeaderboardCsv(entries) {
     const rows = Array.isArray(entries) ? entries : [];
     if (!rows.length) {
-      return `<p class="muted leaderboard-empty">No rankings yet. Complete a set to earn XP from your speed badge!</p>`;
+      toast("No leaderboard data to download yet.", true);
+      return;
+    }
+    const lines = ["Rank,Name,XP,Grade"];
+    for (const e of rows) {
+      lines.push(
+        [
+          e.rank != null ? e.rank : "",
+          e.name || "Learner",
+          e.xp != null ? e.xp : 0,
+          e.grade && e.grade !== "—" ? e.grade : "",
+        ]
+          .map(leaderboardCsvEscape)
+          .join(",")
+      );
+    }
+    // BOM helps Excel open UTF-8 names correctly
+    const blob = new Blob(["\ufeff" + lines.join("\n") + "\n"], {
+      type: "text/csv;charset=utf-8",
+    });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    const stamp = new Date().toISOString().slice(0, 10);
+    a.href = url;
+    a.download = `melon-leaderboard-${stamp}.csv`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+    toast(`Downloaded ${rows.length} row(s)`);
+  }
+
+  function leaderboardDownloadIconSvg() {
+    return `<svg class="action-svg" viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M12 3v12"/>
+      <path d="M7 11l5 5 5-5"/>
+      <path d="M5 19h14"/>
+    </svg>`;
+  }
+
+  function leaderboardTableHtml(entries) {
+    const rows = Array.isArray(entries) ? entries : [];
+    const downloadBtn = `
+      <div class="leaderboard-toolbar">
+        <button type="button" class="btn-icon secondary leaderboard-csv-btn"
+          id="btn-leaderboard-csv"
+          title="Download leaderboard as CSV"
+          aria-label="Download leaderboard as CSV"
+          ${rows.length ? "" : "disabled"}>
+          ${leaderboardDownloadIconSvg()}
+        </button>
+      </div>`;
+    if (!rows.length) {
+      return `${downloadBtn}
+        <p class="muted leaderboard-empty">No rankings yet. Complete a set to earn XP from your speed badge!</p>`;
     }
     const body = rows
       .map((e) => {
@@ -936,6 +998,7 @@ const App = (() => {
       })
       .join("");
     return `
+      ${downloadBtn}
       <div class="table-wrap leaderboard-wrap">
         <table class="leaderboard-table" aria-label="Top 100 leaderboard">
           <thead>
@@ -954,6 +1017,9 @@ const App = (() => {
   function viewHome(leaderboardEntries) {
     const p = state.profile || {};
     const name = learnerNickname(p);
+    state.leaderboardEntries = Array.isArray(leaderboardEntries)
+      ? leaderboardEntries
+      : [];
     return `
       <div class="card">
         <h1>Hello${name ? `, ${escapeHtml(name)}` : ""}</h1>
@@ -975,7 +1041,7 @@ const App = (() => {
       <div class="card leaderboard-card">
         <h2>Leaderboard</h2>
         <p class="muted leaderboard-hint">XP from set badges: Legendary Wizard 5 · Superb Advanced 3 · Cool Novice 1</p>
-        ${leaderboardTableHtml(leaderboardEntries)}
+        ${leaderboardTableHtml(state.leaderboardEntries)}
       </div>`;
   }
 
@@ -5431,6 +5497,11 @@ const App = (() => {
     main().querySelectorAll("[data-go]").forEach((b) => {
       b.onclick = () => navigate(b.dataset.go);
     });
+
+    const lbCsv = document.getElementById("btn-leaderboard-csv");
+    if (lbCsv) {
+      lbCsv.onclick = () => downloadLeaderboardCsv(state.leaderboardEntries);
+    }
 
     // Insights → Study deep link for a specific question set
     main().querySelectorAll("[data-study-level]").forEach((a) => {

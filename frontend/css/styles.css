@@ -285,7 +285,31 @@ button { cursor: pointer; min-height: var(--tap); }
 }
 .leaderboard-hint {
   font-size: 0.82rem;
-  margin: 0 0 0.75rem !important;
+  margin: 0 0 0.5rem !important;
+}
+.leaderboard-toolbar {
+  display: flex;
+  justify-content: flex-end;
+  align-items: center;
+  margin: 0 0 0.4rem;
+}
+.leaderboard-csv-btn {
+  min-height: 2rem;
+  min-width: 2rem;
+  width: 2rem;
+  height: 2rem;
+  border-radius: 8px;
+  background: #ecfdf5;
+  color: var(--brand-dark);
+  border: 1px solid #99f6e4;
+}
+.leaderboard-csv-btn:hover:not(:disabled) {
+  background: #ccfbf1;
+  color: var(--brand);
+}
+.leaderboard-csv-btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
 }
 .leaderboard-empty {
   margin: 0.5rem 0 0 !important;
