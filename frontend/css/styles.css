@@ -291,9 +291,14 @@ button { cursor: pointer; min-height: var(--tap); }
   margin: 0.5rem 0 0 !important;
 }
 .leaderboard-wrap {
+  max-height: min(22rem, 55vh);
   overflow-x: auto;
+  overflow-y: auto;
   -webkit-overflow-scrolling: touch;
   margin: 0 -0.15rem;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: #fff;
 }
 .leaderboard-table {
   width: 100%;
@@ -307,12 +312,16 @@ button { cursor: pointer; min-height: var(--tap); }
   border-bottom: 1px solid var(--border);
 }
 .leaderboard-table th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
   font-size: 0.72rem;
   font-weight: 700;
   letter-spacing: 0.04em;
   text-transform: uppercase;
   color: var(--muted);
   background: #f0fdfa;
+  box-shadow: 0 1px 0 var(--border);
 }
 .leaderboard-table tbody tr:last-child td {
   border-bottom: 0;

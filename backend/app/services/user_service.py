@@ -22,7 +22,7 @@ XP_POINTS = {
     "superb_advanced": XP_ADVANCED,
     "cool_novice": XP_NOVICE,
 }
-LEADERBOARD_TOP_N = 10
+LEADERBOARD_TOP_N = 100
 
 
 def _utcnow() -> datetime:
@@ -506,10 +506,10 @@ def rank_for_xp(xp: int, user_id: str | None = None) -> int | None:
 
 
 def list_leaderboard(limit: int = LEADERBOARD_TOP_N) -> list[dict[str, Any]]:
-    """Top N learners by XP (Rank, Name, XP, Grade)."""
-    n = max(1, min(int(limit or LEADERBOARD_TOP_N), 50))
+    """Top N learners by XP (Rank, Name, XP, Grade). Cap at LEADERBOARD_TOP_N (100)."""
+    n = max(1, min(int(limit or LEADERBOARD_TOP_N), LEADERBOARD_TOP_N))
     # Fetch a bit extra in case of soft-deleted / incomplete rows
-    raw = db.query_gsi1(keys.ENTITY_LEADERBOARD, limit=n * 3)
+    raw = db.query_gsi1(keys.ENTITY_LEADERBOARD, limit=min(n * 3, 300))
     rows: list[dict[str, Any]] = []
     for item in raw:
         if item.get("deleted_at"):

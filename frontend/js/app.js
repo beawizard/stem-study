@@ -662,7 +662,7 @@ const App = (() => {
       // Re-render Home quietly; keep leaderboard populated
       let boardEntries = [];
       try {
-        const board = await Api.leaderboard(token(), { limit: 10 });
+        const board = await Api.leaderboard(token(), { limit: 100 });
         boardEntries = board.entries || [];
       } catch {
         boardEntries = [];
@@ -937,7 +937,7 @@ const App = (() => {
       .join("");
     return `
       <div class="table-wrap leaderboard-wrap">
-        <table class="leaderboard-table" aria-label="Top 10 leaderboard">
+        <table class="leaderboard-table" aria-label="Top 100 leaderboard">
           <thead>
             <tr>
               <th scope="col">Rank</th>
@@ -3799,7 +3799,7 @@ const App = (() => {
         updateNavProfileAvatar();
         let boardEntries = [];
         try {
-          const board = await Api.leaderboard(token(), { limit: 10 });
+          const board = await Api.leaderboard(token(), { limit: 100 });
           boardEntries = board.entries || [];
         } catch {
           boardEntries = [];
