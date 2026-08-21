@@ -20,6 +20,47 @@ SUBJECT_ID_PATTERN = re.compile(r"^[a-z][a-z0-9_-]{0,62}$")
 # STEM subject categories (admin Content creation)
 STEM_CATEGORIES = ("Science", "Technology", "Engineering", "Mathematics")
 
+# Study content grade band (topic / subject attribute — not learner profile grade)
+CONTENT_GRADE_LEVELS = (
+    "Kindergarten",
+    "Grade 1",
+    "Grade 2",
+    "Grade 3",
+    "Grade 4",
+    "Grade 5",
+    "Grade 6",
+    "Grade 7",
+    "Grade 8",
+    "Grade 9",
+    "Grade 10",
+    "Grade 11",
+    "Grade 12",
+)
+
+
+def normalize_content_grade(value: str | None) -> str | None:
+    """Return canonical grade_level label or None if empty/invalid."""
+    if value is None:
+        return None
+    raw = str(value).strip()
+    if not raw:
+        return None
+    lower = raw.lower()
+    if lower in ("k", "kg", "kindergarten", "kindergarden"):
+        return "Kindergarten"
+    # Accept "Grade 1", "grade1", "G1", "1"
+    m = re.match(r"^(?:grade\s*|g\s*)?(\d{1,2})$", lower)
+    if m:
+        n = int(m.group(1))
+        if 1 <= n <= 12:
+            return f"Grade {n}"
+    for label in CONTENT_GRADE_LEVELS:
+        if lower == label.lower():
+            return label
+    raise ValueError(
+        f"grade_level must be Kindergarten or Grade 1–12 (got {value!r})"
+    )
+
 
 class ProfileUpdate(BaseModel):
     """PATCH /me — learner display name, school, grade (all optional; at least one)."""
@@ -240,6 +281,8 @@ class SubjectCreate(BaseModel):
     subject_id: str | None = Field(default=None, min_length=1, max_length=MAX_SUBJECT_ID_LEN)
     description: str = Field(default="", max_length=MAX_DESC_LEN)
     sort_order: int = Field(default=0, ge=0, le=10000)
+    # Study content grade band shown on Study landing (Kindergarten / Grade 1–12)
+    grade_level: str | None = Field(default=None, max_length=32)
 
     @field_validator("category")
     @classmethod
@@ -263,6 +306,11 @@ class SubjectCreate(BaseModel):
             )
         return v
 
+    @field_validator("grade_level")
+    @classmethod
+    def validate_grade_level(cls, v: str | None) -> str | None:
+        return normalize_content_grade(v)
+
     @model_validator(mode="after")
     def require_topic_or_name(self) -> "SubjectCreate":
         if not ((self.topic and self.topic.strip()) or (self.name and self.name.strip())):
@@ -275,7 +323,7 @@ class SubjectCreate(BaseModel):
 
 
 class SubjectUpdate(BaseModel):
-    """Partial update of a subject (topic, description, category, sort_order)."""
+    """Partial update of a subject (topic, description, category, sort_order, grade)."""
 
     model_config = ConfigDict(str_strip_whitespace=True, extra="forbid")
 
@@ -283,6 +331,7 @@ class SubjectUpdate(BaseModel):
     topic: str | None = Field(default=None, min_length=1, max_length=100)
     description: str | None = Field(default=None, max_length=MAX_DESC_LEN)
     sort_order: int | None = Field(default=None, ge=0, le=10000)
+    grade_level: str | None = Field(default=None, max_length=32)
 
     @field_validator("category")
     @classmethod
@@ -293,6 +342,16 @@ class SubjectUpdate(BaseModel):
             if v.lower() == cat.lower():
                 return cat
         raise ValueError(f"category must be one of: {', '.join(STEM_CATEGORIES)}")
+
+    @field_validator("grade_level")
+    @classmethod
+    def validate_grade_level(cls, v: str | None) -> str | None:
+        # Allow explicit clear with empty string → stored as ""
+        if v is None:
+            return None
+        if str(v).strip() == "":
+            return ""
+        return normalize_content_grade(v)
 
 
 class LevelCreate(BaseModel):

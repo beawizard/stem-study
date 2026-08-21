@@ -1426,6 +1426,33 @@ body.admin-mode .table-wrap {
   gap: 0.25rem;
   min-width: 0;
 }
+.study-category-grade-row {
+  flex-direction: row;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 0.55rem 0.75rem;
+}
+.study-category-wrap {
+  flex: 1 1 10rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  min-width: 0;
+}
+.study-grade-badge {
+  flex: 0 0 auto;
+  align-self: flex-end;
+  margin-bottom: 0.15rem;
+  padding: 0.45rem 0.75rem;
+  border-radius: 10px;
+  border: 2px solid #99f6e4;
+  background: linear-gradient(145deg, #ecfdf5, #e0f2fe);
+  color: var(--brand-dark);
+  font-weight: 800;
+  font-size: 0.9rem;
+  line-height: 1.2;
+  white-space: nowrap;
+}
 .study-pickers label {
   font-size: 0.85rem;
   font-weight: 700;

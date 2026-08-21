@@ -53,6 +53,7 @@ def create_subject(data: SubjectCreate) -> dict[str, Any]:
         raise ConflictError(f"Subject '{subject_id}' already exists")
 
     now = _utcnow_iso()
+    grade_level = (getattr(data, "grade_level", None) or "") or ""
     # name kept as topic for backward-compatible study UI consumers
     item = {
         "PK": pk,
@@ -66,6 +67,7 @@ def create_subject(data: SubjectCreate) -> dict[str, Any]:
         "name": topic,
         "description": data.description or "",
         "sort_order": data.sort_order,
+        "grade_level": grade_level,
         "created_at": now,
         "updated_at": now,
         "deleted_at": "",
@@ -137,6 +139,9 @@ def update_subject(subject_id: str, data) -> dict[str, Any]:
         order = int(payload["sort_order"])
         updates["sort_order"] = order
         updates["GSI1SK"] = f"{order:05d}#{subject_id}"
+    if "grade_level" in payload and payload["grade_level"] is not None:
+        # Empty string clears the tag
+        updates["grade_level"] = str(payload["grade_level"] or "").strip()
 
     db.update_item(
         keys.subject_pk(subject_id),
@@ -702,6 +707,7 @@ def subject_label(item: dict[str, Any]) -> str:
 def _public_subject(item: dict[str, Any]) -> dict[str, Any]:
     category = _subject_category(item)
     topic = _subject_topic(item)
+    grade = (item.get("grade_level") or "").strip() or None
     return {
         "subject_id": item.get("subject_id"),
         "category": category,
@@ -710,6 +716,7 @@ def _public_subject(item: dict[str, Any]) -> dict[str, Any]:
         "label": f"{category} - {topic}",
         "description": item.get("description", ""),
         "sort_order": item.get("sort_order", 0),
+        "grade_level": grade,
         "created_at": item.get("created_at"),
     }
 

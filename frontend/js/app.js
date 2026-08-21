@@ -1622,15 +1622,28 @@ const App = (() => {
           })
         : performanceRadarHtml({ axes: [] });
 
+      const gradeLabel = selected && selected.grade_level
+        ? String(selected.grade_level).trim()
+        : "";
+
       return `
         <div class="card study-landing-card">
           <div class="study-header">
             <div class="study-header-main">
               <h1 class="study-page-title">Study</h1>
               <div class="study-pickers study-pickers-stacked">
-                <div class="study-picker-field">
-                  <label for="study-category">Category</label>
-                  <select id="study-category">${categoryOptions}</select>
+                <div class="study-picker-field study-category-grade-row">
+                  <div class="study-category-wrap">
+                    <label for="study-category">Category</label>
+                    <select id="study-category">${categoryOptions}</select>
+                  </div>
+                  ${
+                    gradeLabel
+                      ? `<div class="study-grade-badge" title="Content grade level">${escapeHtml(
+                          gradeLabel
+                        )}</div>`
+                      : ""
+                  }
                 </div>
                 <div class="study-picker-field">
                   <label for="study-topic">Topic</label>
@@ -2662,6 +2675,9 @@ const App = (() => {
       workingSubject && workingSubject.sort_order != null
         ? workingSubject.sort_order
         : 1;
+    const formGradeLevel = workingSubject
+      ? workingSubject.grade_level || ""
+      : "";
 
     let schools = [];
     try {
@@ -2780,10 +2796,18 @@ const App = (() => {
                 value="${escapeAttr(formTopic)}" />
             </div>
           </div>
-          <div>
-            <label for="subj-desc">Description</label>
-            <input id="subj-desc" maxlength="2000" placeholder="Optional"
-              value="${escapeAttr(formDesc)}" />
+          <div class="row">
+            <div class="grow">
+              <label for="subj-grade-level">Grade level</label>
+              <select id="subj-grade-level">
+                ${gradeSelectOptionsHtml(formGradeLevel)}
+              </select>
+            </div>
+            <div class="grow">
+              <label for="subj-desc">Description</label>
+              <input id="subj-desc" maxlength="2000" placeholder="Optional"
+                value="${escapeAttr(formDesc)}" />
+            </div>
           </div>
           <div class="row" style="align-items:flex-end">
             <div>
@@ -2795,7 +2819,7 @@ const App = (() => {
               subjectId ? "" : "disabled"
             }>Edit Subject</button>
           </div>
-          <p class="muted" style="margin:0">Working subject is shown as <strong>Category – Topic</strong> (e.g. Mathematics – Addition). Use <strong>Edit Subject</strong> to update topic/description for the selected working subject.</p>
+          <p class="muted" style="margin:0">Working subject is shown as <strong>Category – Topic</strong> (e.g. Mathematics – Addition). Set <strong>Grade level</strong> (Kindergarten or Grade&nbsp;1–12) so Study shows it next to Category. Use <strong>Edit Subject</strong> to update the selected working subject.</p>
         </form>
         <div class="row" style="margin-top:1rem">
           <div class="grow">
@@ -2891,11 +2915,18 @@ const App = (() => {
             Each <strong>worksheet</strong> becomes one level. The <strong>sheet name</strong> is the level name
             (e.g. sheet <code>Level1-0</code> → level &quot;Level1-0&quot;). Rows use the same formats as CSV:
             <code>1,+,2,=,3</code> or <code>1+2,3</code>. Each sheet is imported as one question set (replace mode).
+            Tag the working subject’s <strong>Grade level</strong> below (or in Subjects) before/after import.
           </p>
           <form id="admin-excel-form" class="stack">
             <div>
               <label for="excel-file">Upload Excel (.xlsx / .xls)</label>
               <input id="excel-file" type="file" accept=".xlsx,.xls,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-excel" />
+            </div>
+            <div>
+              <label for="excel-grade-level">Grade level (for this topic)</label>
+              <select id="excel-grade-level">
+                ${gradeSelectOptionsHtml(formGradeLevel)}
+              </select>
             </div>
             <label class="check-row">
               <input type="checkbox" id="excel-replace" checked />
@@ -5561,11 +5592,15 @@ const App = (() => {
             toast("Topic is required.", true);
             return;
           }
+          const gradeLevel = (
+            document.getElementById("subj-grade-level")?.value || ""
+          ).trim();
           const created = await Api.createSubject(token(), {
             category,
             topic,
             description: document.getElementById("subj-desc").value.trim(),
             sort_order: parseInt(document.getElementById("subj-order").value, 10) || 0,
+            grade_level: gradeLevel || null,
           });
           toast(`Subject "${subjectDisplayLabel(created)}" created`);
           state.adminSubjectId = created.subject_id;
@@ -5594,11 +5629,15 @@ const App = (() => {
         }
         editSubjectBtn.disabled = true;
         try {
+          const gradeLevel = (
+            document.getElementById("subj-grade-level")?.value || ""
+          ).trim();
           const payload = {
             category,
             topic,
             description: document.getElementById("subj-desc")?.value.trim() || "",
             sort_order: parseInt(document.getElementById("subj-order")?.value, 10) || 0,
+            grade_level: gradeLevel,
           };
           // Prefer Api.updateSubject; fall back if a stale-cached api.js is loaded
           const updated =
@@ -5770,6 +5809,27 @@ const App = (() => {
             existingLevels = lv.levels || [];
           } catch (_) {
             existingLevels = [];
+          }
+          const excelGrade = (
+            document.getElementById("excel-grade-level")?.value || ""
+          ).trim();
+          if (excelGrade) {
+            try {
+              if (typeof Api.updateSubject === "function") {
+                await Api.updateSubject(token(), subjectId, {
+                  grade_level: excelGrade,
+                });
+              } else {
+                await updateSubjectFallback(subjectId, {
+                  grade_level: excelGrade,
+                });
+              }
+            } catch (gradeErr) {
+              toast(
+                `Import OK but grade tag failed: ${gradeErr.message || gradeErr}`,
+                true
+              );
+            }
           }
           const results = await importExcelWorkbook(file, subjectId, {
             replace,
