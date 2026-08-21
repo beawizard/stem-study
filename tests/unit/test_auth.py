@@ -79,3 +79,20 @@ def test_groups_as_list_string():
     }
     user = get_user_context(event)
     assert "admin" in user.groups
+
+
+def test_groups_from_bearer_id_token_when_authorizer_omits_them():
+    import base64
+    import json
+
+    payload = base64.urlsafe_b64encode(
+        json.dumps({"cognito:groups": ["admin"], "sub": "abc"}).encode()
+    ).decode().rstrip("=")
+    event = {
+        "requestContext": {
+            "authorizer": {"jwt": {"claims": {"sub": "abc", "email": "a@b.com"}}}
+        },
+        "headers": {"Authorization": f"Bearer header.{payload}.sig"},
+    }
+    user = get_user_context(event)
+    assert user.is_admin

@@ -3763,12 +3763,12 @@ const App = (() => {
           </div>
         </div>
         ${
-          isAdmin || editing
-            ? `<label class="mastery-shared-label">
+          isAdmin
+            ? `<label class="mastery-shared-label" for="mastery-shared">
                 <input type="checkbox" id="mastery-shared" ${
                   (editing ? !!draft.shared : true) ? "checked" : ""
                 } />
-                Make visible to all learners
+                <span>Make visible to all learners</span>
               </label>
               <p class="mastery-shared-note ${
                 editing && !draft.shared ? "is-private" : "is-shared"

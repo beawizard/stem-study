@@ -132,8 +132,8 @@ def create_mastery(
 ) -> dict[str, Any]:
     """Create and publish a mastery collection.
 
-    Admin packs are shared with every learner by default (client sends shared=true).
-    Learner packs stay personal even if they send shared=true.
+    Admin packs are shared with every learner when shared=true (the default in
+    the admin Step 4 checkbox). Learner packs stay personal.
     """
     shared = bool(is_admin) and bool(data.shared)
     subject_ids = list(data.subject_ids or [])
