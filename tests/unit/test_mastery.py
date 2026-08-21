@@ -101,3 +101,70 @@ def test_window_status():
         mastery_service.window_status("2026-01-01", "2026-03-01", today=date(2026, 6, 1))
         == "ended"
     )
+
+
+@pytest.mark.unit
+def test_update_and_delete_mastery(dynamodb_table):
+    _seed_math_topics(dynamodb_table)
+    data = MasteryCreate(
+        name="Pack A",
+        category="Mathematics",
+        topics=["Arithmetic (Addition)", "Arithmetic (Subtraction)"],
+        start_date="2026-08-01",
+        end_date="2026-09-30",
+    )
+    created = mastery_service.create_mastery("u1", data, is_admin=False)
+    mid = created["mastery_id"]
+
+    updated = mastery_service.update_mastery(
+        "u1",
+        mid,
+        MasteryCreate(
+            name="Pack A Renamed",
+            category="Mathematics",
+            topics=["Arithmetic (Addition)", "Fractions"],
+            start_date="2026-08-01",
+            end_date="2026-10-15",
+        ),
+        is_admin=False,
+    )
+    assert updated["name"] == "Pack A Renamed"
+    assert "Fractions" in updated["topics"]
+    assert updated["can_manage"] is True
+
+    # Non-owner cannot see/edit a personal pack (not found — no existence leak)
+    with pytest.raises(mastery_service.MasteryNotFound):
+        mastery_service.update_mastery(
+            "u2",
+            mid,
+            MasteryCreate(
+                name="Hijack",
+                category="Mathematics",
+                topics=["Arithmetic (Addition)", "Fractions"],
+                start_date="2026-08-01",
+                end_date="2026-10-15",
+            ),
+            is_admin=False,
+        )
+
+    # Admin can edit someone else's pack
+    admin_updated = mastery_service.update_mastery(
+        "admin-x",
+        mid,
+        MasteryCreate(
+            name="Admin Edit",
+            category="Mathematics",
+            topics=["Arithmetic (Addition)", "Fractions"],
+            start_date="2026-08-01",
+            end_date="2026-10-15",
+            shared=True,
+        ),
+        is_admin=True,
+    )
+    assert admin_updated["name"] == "Admin Edit"
+    assert admin_updated["shared"] is True
+
+    mastery_service.soft_delete_mastery("admin-x", mid, is_admin=True)
+    with pytest.raises(mastery_service.MasteryNotFound):
+        mastery_service.get_mastery("u1", mid)
+    assert mastery_service.list_mastery_for_user("u1") == []

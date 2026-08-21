@@ -32,7 +32,7 @@ Routes (all require Cognito JWT unless noted):
   GET               /insights   (?notices=1 optional; default skips content_notices)
   GET               /leaderboard                 (top 100 by XP: Rank, Name, XP, Grade)
   GET|POST          /mastery                     (list published / create+publish collection)
-  GET|DELETE        /mastery/{mastery_id}
+  GET|PUT|DELETE    /mastery/{mastery_id}
   POST              /payments
   GET               /payments
   GET               /admin/payments              (admin)
@@ -88,6 +88,7 @@ from app.validation import (
     LevelCreate,
     LevelUpdate,
     MasteryCreate,
+    MasteryUpdate,
     PaymentSubmit,
     PaymentVerify,
     ProfileUpdate,
@@ -322,7 +323,13 @@ def _route(
 
     # --- Mastery collections ---
     if method == "GET" and path == "/mastery":
-        return ok({"collections": mastery_service.list_mastery_for_user(user.user_id)})
+        return ok(
+            {
+                "collections": mastery_service.list_mastery_for_user(
+                    user.user_id, is_admin=user.is_admin
+                )
+            }
+        )
 
     if method == "POST" and path == "/mastery":
         data = parse_body(MasteryCreate, body)
@@ -340,9 +347,30 @@ def _route(
         mastery_id = unquote(m_mastery.group(1))
         if method == "GET":
             try:
-                return ok(mastery_service.get_mastery(user.user_id, mastery_id))
+                return ok(
+                    mastery_service.get_mastery(
+                        user.user_id, mastery_id, is_admin=user.is_admin
+                    )
+                )
             except MasteryNotFound:
                 return not_found("Mastery collection not found")
+        if method == "PUT" or method == "PATCH":
+            data = parse_body(MasteryUpdate, body)
+            try:
+                return ok(
+                    mastery_service.update_mastery(
+                        user.user_id,
+                        mastery_id,
+                        data,
+                        is_admin=user.is_admin,
+                    )
+                )
+            except MasteryNotFound:
+                return not_found("Mastery collection not found")
+            except MasteryForbidden:
+                return forbidden("Not allowed to edit this mastery collection")
+            except ValueError as exc:
+                return bad_request(str(exc))
         if method == "DELETE":
             try:
                 mastery_service.soft_delete_mastery(

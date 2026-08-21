@@ -388,7 +388,15 @@ button { cursor: pointer; min-height: var(--tap); }
 .mastery-chip-row {
   display: flex;
   flex-wrap: wrap;
-  gap: 0.5rem;
+  gap: 0.55rem;
+  align-items: center;
+}
+.mastery-chip-wrap {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.25rem;
+  max-width: 100%;
 }
 .mastery-chip {
   display: inline-flex;
@@ -402,6 +410,18 @@ button { cursor: pointer; min-height: var(--tap); }
 }
 .mastery-chip-name {
   font-weight: 700;
+}
+.mastery-chip-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.15rem;
+}
+.mastery-chip-action {
+  min-height: 1.85rem;
+  min-width: 1.85rem;
+  width: 1.85rem;
+  height: 1.85rem;
+  border-radius: 8px;
 }
 .mastery-steps {
   display: flex;

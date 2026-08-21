@@ -111,6 +111,12 @@ const Api = (() => {
       request("/mastery", { method: "POST", body, token }),
     getMastery: (token, masteryId) =>
       request(`/mastery/${encodeURIComponent(masteryId)}`, { token }),
+    updateMastery: (token, masteryId, body) =>
+      request(`/mastery/${encodeURIComponent(masteryId)}`, {
+        method: "PUT",
+        body,
+        token,
+      }),
     deleteMastery: (token, masteryId) =>
       request(`/mastery/${encodeURIComponent(masteryId)}`, {
         method: "DELETE",

@@ -36,8 +36,9 @@ const App = (() => {
     /** Cached Home leaderboard rows for CSV download */
     leaderboardEntries: [],
     /** Mastery hub / create wizard / study-within-collection */
-    masteryView: "hub", // hub | create | study
+    masteryView: "hub", // hub | create | edit | study
     masteryCreateStep: 1,
+    masteryEditId: null, // when editing an existing collection
     masteryDraft: {
       name: "",
       category: "",
@@ -3509,6 +3510,20 @@ const App = (() => {
       shared: false,
     };
     state.masteryCreateStep = 1;
+    state.masteryEditId = null;
+  }
+
+  function fillMasteryDraftFromCollection(c) {
+    state.masteryDraft = {
+      name: c.name || "",
+      category: c.category || "",
+      topics: Array.isArray(c.topics) ? [...c.topics] : [],
+      start_date: c.start_date || "",
+      end_date: c.end_date || "",
+      shared: !!c.shared,
+    };
+    state.masteryEditId = c.mastery_id || null;
+    state.masteryCreateStep = 1;
   }
 
   function masteryTopicGroups(allSubjects, category) {
@@ -3542,7 +3557,7 @@ const App = (() => {
       return viewSession();
     }
 
-    if (state.masteryView === "create") {
+    if (state.masteryView === "create" || state.masteryView === "edit") {
       return viewMasteryCreate();
     }
     if (state.masteryView === "study" && state.masteryActive) {
@@ -3562,6 +3577,7 @@ const App = (() => {
         <p class="muted">${escapeHtml(e.message || "Could not load collections")}</p></div>`;
     }
 
+    const isAdmin = typeof Auth.isAdmin === "function" && Auth.isAdmin();
     const chips = collections.length
       ? collections
           .map((c) => {
@@ -3575,12 +3591,26 @@ const App = (() => {
             const shared = c.shared
               ? `<span class="badge subject-tag">Shared</span>`
               : "";
-            return `<button type="button" class="btn mastery-chip ${
-              win === "ended" ? "secondary" : ""
-            }" data-mastery-open="${escapeAttr(c.mastery_id)}">
-              <span class="mastery-chip-name">${escapeHtml(c.name || "Untitled")}</span>
-              ${shared}${badge}
-            </button>`;
+            const canManage = Boolean(c.can_manage || c.is_owner || isAdmin);
+            const actions = canManage
+              ? `<span class="mastery-chip-actions">
+                  <button type="button" class="btn-icon secondary mastery-chip-action"
+                    data-mastery-edit="${escapeAttr(c.mastery_id)}"
+                    title="Edit collection" aria-label="Edit ${escapeAttr(c.name || "collection")}">${iconPencil()}</button>
+                  <button type="button" class="btn-icon danger mastery-chip-action"
+                    data-mastery-delete="${escapeAttr(c.mastery_id)}"
+                    title="Delete collection" aria-label="Delete ${escapeAttr(c.name || "collection")}">${iconTrash()}</button>
+                </span>`
+              : "";
+            return `<div class="mastery-chip-wrap">
+              <button type="button" class="btn mastery-chip ${
+                win === "ended" ? "secondary" : ""
+              }" data-mastery-open="${escapeAttr(c.mastery_id)}">
+                <span class="mastery-chip-name">${escapeHtml(c.name || "Untitled")}</span>
+                ${shared}${badge}
+              </button>
+              ${actions}
+            </div>`;
           })
           .join("")
       : `<p class="muted">No published mastery collections yet. Create one to get started.</p>`;
@@ -3598,6 +3628,7 @@ const App = (() => {
   }
 
   async function viewMasteryCreate() {
+    const editing = state.masteryView === "edit" && state.masteryEditId;
     const step = Math.min(4, Math.max(1, Number(state.masteryCreateStep) || 1));
     state.masteryCreateStep = step;
     if (!state.masteryDraft) resetMasteryDraft();
@@ -3737,11 +3768,12 @@ const App = (() => {
     }
 
     const backLabel = step === 1 ? "Cancel" : "Back";
-    const nextLabel = step === 4 ? "Publish" : "Next";
+    const nextLabel =
+      step === 4 ? (editing ? "Save changes" : "Publish") : "Next";
 
     return `
       <div class="card mastery-create-card">
-        <h1>Create Mastery</h1>
+        <h1>${editing ? "Edit Mastery" : "Create Mastery"}</h1>
         <div class="mastery-steps">${stepsHtml}</div>
         <div class="stack mastery-step-body">${body}</div>
         <div class="row mastery-wizard-actions" style="margin-top:1rem">
@@ -3918,14 +3950,17 @@ const App = (() => {
         return false;
       }
     } else if (step === 2) {
-      draft.category =
+      const nextCat =
         document.getElementById("mastery-category")?.value || draft.category;
-      if (!draft.category) {
+      if (!nextCat) {
         toast("Select a category", true);
         return false;
       }
-      // Changing category clears prior topic picks
-      draft.topics = [];
+      // Changing category clears prior topic picks (keep picks when editing same category)
+      if (nextCat !== draft.category) {
+        draft.topics = [];
+      }
+      draft.category = nextCat;
     } else if (step === 3) {
       const picked = [];
       main()
@@ -3986,14 +4021,62 @@ const App = (() => {
       };
     });
 
+    main().querySelectorAll("[data-mastery-edit]").forEach((btn) => {
+      btn.onclick = async (ev) => {
+        ev.preventDefault();
+        ev.stopPropagation();
+        const id = btn.getAttribute("data-mastery-edit");
+        try {
+          const col =
+            (state.masteryCollections || []).find((c) => c.mastery_id === id) ||
+            (await Api.getMastery(token(), id));
+          fillMasteryDraftFromCollection(col);
+          state.masteryView = "edit";
+          state.masteryActive = null;
+          render();
+        } catch (e) {
+          toast(e.message || String(e), true);
+        }
+      };
+    });
+
+    main().querySelectorAll("[data-mastery-delete]").forEach((btn) => {
+      btn.onclick = async (ev) => {
+        ev.preventDefault();
+        ev.stopPropagation();
+        const id = btn.getAttribute("data-mastery-delete");
+        const col = (state.masteryCollections || []).find(
+          (c) => c.mastery_id === id
+        );
+        const label = (col && col.name) || "this collection";
+        if (
+          !window.confirm(
+            `Delete mastery “${label}”? Learners will no longer see it on the Mastery page.`
+          )
+        ) {
+          return;
+        }
+        btn.disabled = true;
+        try {
+          await Api.deleteMastery(token(), id);
+          toast("Mastery collection deleted");
+          if (state.masteryActive && state.masteryActive.mastery_id === id) {
+            state.masteryActive = null;
+            state.masteryView = "hub";
+          }
+          render();
+        } catch (e) {
+          toast(e.message || String(e), true);
+          btn.disabled = false;
+        }
+      };
+    });
+
     main().querySelectorAll("[data-mastery-hub]").forEach((btn) => {
       btn.onclick = () => {
         state.masteryView = "hub";
         state.masteryActive = null;
-        // If leaving mid-quiz, clear session UI mode
-        if (state.studyPhase && state.session && !state.session.is_assessment) {
-          // keep session? Better clear when returning to hub without finishing
-        }
+        state.masteryEditId = null;
         render();
       };
     });
@@ -4013,6 +4096,7 @@ const App = (() => {
       back.onclick = () => {
         if (state.masteryCreateStep <= 1) {
           state.masteryView = "hub";
+          state.masteryEditId = null;
           render();
           return;
         }
@@ -4029,27 +4113,38 @@ const App = (() => {
           render();
           return;
         }
-        // Publish
         const draft = state.masteryDraft;
+        const editing = state.masteryView === "edit" && state.masteryEditId;
+        const payload = {
+          name: draft.name,
+          category: draft.category,
+          topics: draft.topics,
+          start_date: draft.start_date,
+          end_date: draft.end_date,
+          shared: !!draft.shared,
+        };
         next.disabled = true;
-        next.textContent = "Publishing…";
+        next.textContent = editing ? "Saving…" : "Publishing…";
         try {
-          const created = await Api.createMastery(token(), {
-            name: draft.name,
-            category: draft.category,
-            topics: draft.topics,
-            start_date: draft.start_date,
-            end_date: draft.end_date,
-            shared: !!draft.shared,
-          });
-          toast(`Published “${created.name}”`);
+          if (editing) {
+            const updated = await Api.updateMastery(
+              token(),
+              state.masteryEditId,
+              payload
+            );
+            toast(`Updated “${updated.name}”`);
+          } else {
+            const created = await Api.createMastery(token(), payload);
+            toast(`Published “${created.name}”`);
+          }
           state.masteryView = "hub";
           state.masteryActive = null;
+          state.masteryEditId = null;
           render();
         } catch (e) {
           toast(e.message || String(e), true);
           next.disabled = false;
-          next.textContent = "Publish";
+          next.textContent = editing ? "Save changes" : "Publish";
         }
       };
     }

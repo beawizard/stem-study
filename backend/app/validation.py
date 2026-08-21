@@ -246,6 +246,10 @@ class MasteryCreate(BaseModel):
         return self
 
 
+# Full replace body for PUT /mastery/{id} (same shape as create)
+MasteryUpdate = MasteryCreate
+
+
 class TaskUpdate(BaseModel):
     model_config = ConfigDict(str_strip_whitespace=True, extra="forbid")
 

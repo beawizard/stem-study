@@ -7,8 +7,10 @@ import uuid
 from datetime import date, datetime, timezone
 from typing import Any
 
+from boto3.dynamodb.conditions import Attr
+
 from app import db, keys
-from app.validation import MasteryCreate
+from app.validation import MasteryCreate, MasteryUpdate
 
 
 class MasteryNotFound(Exception):
@@ -25,6 +27,64 @@ def _utcnow_iso() -> str:
 
 def _new_id() -> str:
     return uuid.uuid4().hex
+
+
+def _find_mastery_raw(
+    mastery_id: str,
+    *,
+    viewer_id: str | None = None,
+    is_admin: bool = False,
+) -> dict[str, Any] | None:
+    """Locate a mastery item by id (own row, shared GSI, or admin table scan)."""
+    if viewer_id:
+        own = db.get_item(keys.user_pk(viewer_id), keys.mastery_sk(mastery_id))
+        if (
+            own
+            and not own.get("deleted_at")
+            and own.get("entity_type") == "MASTERY"
+            and own.get("mastery_id") == mastery_id
+        ):
+            return own
+
+    for item in db.query_gsi1(
+        keys.ENTITY_MASTERY_SHARED, sk_begins_with=mastery_id, limit=10
+    ):
+        if item.get("deleted_at"):
+            continue
+        if item.get("mastery_id") != mastery_id:
+            continue
+        if item.get("entity_type") and item.get("entity_type") != "MASTERY":
+            continue
+        return item
+
+    if not is_admin:
+        return None
+
+    # Admin: find another learner's personal pack (no shared GSI entry)
+    from app.db import _from_dynamo
+
+    table = db.get_table()
+    kwargs: dict[str, Any] = {
+        "FilterExpression": Attr("entity_type").eq("MASTERY")
+        & Attr("mastery_id").eq(mastery_id)
+        & (Attr("deleted_at").not_exists() | Attr("deleted_at").eq("")),
+    }
+    while True:
+        resp = table.scan(**kwargs)
+        items = resp.get("Items") or []
+        if items:
+            return _from_dynamo(items[0])
+        lek = resp.get("LastEvaluatedKey")
+        if not lek:
+            break
+        kwargs["ExclusiveStartKey"] = lek
+    return None
+
+
+def _can_manage(item: dict[str, Any], user_id: str, *, is_admin: bool) -> bool:
+    if is_admin:
+        return True
+    return bool(item.get("user_id") == user_id)
 
 
 def _base_topic_name(topic_or_name: str) -> str:
@@ -108,31 +168,28 @@ def create_mastery(
     return _public(item, viewer_id=user_id)
 
 
-def get_mastery(user_id: str, mastery_id: str) -> dict[str, Any]:
-    """Load a collection the viewer owns or that is admin-shared."""
-    own = db.get_item(keys.user_pk(user_id), keys.mastery_sk(mastery_id))
-    if own and not own.get("deleted_at") and own.get("entity_type") == "MASTERY":
-        return _public(own, viewer_id=user_id)
-
-    shared_rows = db.query_gsi1(
-        keys.ENTITY_MASTERY_SHARED, sk_begins_with=mastery_id, limit=5
-    )
-    for item in shared_rows:
-        if item.get("deleted_at"):
-            continue
-        if item.get("mastery_id") != mastery_id:
-            continue
-        if not item.get("shared"):
-            continue
-        if item.get("status") != "published":
-            continue
-        return _public(item, viewer_id=user_id)
-
-    raise MasteryNotFound(f"Mastery {mastery_id} not found")
+def get_mastery(
+    user_id: str, mastery_id: str, *, is_admin: bool = False
+) -> dict[str, Any]:
+    """Load a collection the viewer owns, that is shared, or (admin) any pack."""
+    item = _find_mastery_raw(mastery_id, viewer_id=user_id, is_admin=is_admin)
+    if not item:
+        raise MasteryNotFound(f"Mastery {mastery_id} not found")
+    # Non-admin may only read own or shared published packs
+    if not is_admin and item.get("user_id") != user_id and not item.get("shared"):
+        raise MasteryNotFound(f"Mastery {mastery_id} not found")
+    if item.get("status") == "deleted":
+        raise MasteryNotFound(f"Mastery {mastery_id} not found")
+    return _public(item, viewer_id=user_id, is_admin=is_admin)
 
 
-def list_mastery_for_user(user_id: str) -> list[dict[str, Any]]:
-    """Published personal collections + admin-shared packs for the hub menu."""
+def list_mastery_for_user(
+    user_id: str, *, is_admin: bool = False
+) -> list[dict[str, Any]]:
+    """Published personal collections + admin-shared packs for the hub menu.
+
+    Admins also see every published pack (including other learners' personal ones).
+    """
     by_id: dict[str, dict[str, Any]] = {}
 
     own_items = db.query_pk(keys.user_pk(user_id), sk_begins_with="MASTERY#")
@@ -145,7 +202,7 @@ def list_mastery_for_user(user_id: str) -> list[dict[str, Any]]:
             continue
         mid = item.get("mastery_id")
         if mid:
-            by_id[mid] = _public(item, viewer_id=user_id)
+            by_id[mid] = _public(item, viewer_id=user_id, is_admin=is_admin)
 
     for item in db.query_gsi1(keys.ENTITY_MASTERY_SHARED):
         if item.get("deleted_at"):
@@ -154,64 +211,110 @@ def list_mastery_for_user(user_id: str) -> list[dict[str, Any]]:
             continue
         if item.get("status") != "published":
             continue
-        # Skip own already listed
         mid = item.get("mastery_id")
         if not mid or mid in by_id:
             continue
-        by_id[mid] = _public(item, viewer_id=user_id)
+        by_id[mid] = _public(item, viewer_id=user_id, is_admin=is_admin)
+
+    if is_admin:
+        from app.db import _from_dynamo
+
+        table = db.get_table()
+        kwargs: dict[str, Any] = {
+            "FilterExpression": Attr("entity_type").eq("MASTERY")
+            & Attr("status").eq("published")
+            & (Attr("deleted_at").not_exists() | Attr("deleted_at").eq("")),
+        }
+        while True:
+            resp = table.scan(**kwargs)
+            for raw in resp.get("Items") or []:
+                item = _from_dynamo(raw)
+                mid = item.get("mastery_id")
+                if not mid or mid in by_id:
+                    continue
+                by_id[mid] = _public(item, viewer_id=user_id, is_admin=True)
+            lek = resp.get("LastEvaluatedKey")
+            if not lek:
+                break
+            kwargs["ExclusiveStartKey"] = lek
 
     rows = list(by_id.values())
     rows.sort(key=lambda m: m.get("published_at") or m.get("created_at") or "", reverse=True)
     return rows
 
 
-def soft_delete_mastery(user_id: str, mastery_id: str, *, is_admin: bool = False) -> None:
-    """Owner (or admin for shared) soft-deletes a collection."""
-    own = db.get_item(keys.user_pk(user_id), keys.mastery_sk(mastery_id))
-    if own and not own.get("deleted_at"):
-        if own.get("user_id") != user_id and not is_admin:
-            raise MasteryForbidden("Not mastery owner")
-        db.update_item(
-            keys.user_pk(own["user_id"]),
-            keys.mastery_sk(mastery_id),
-            {
-                "deleted_at": _utcnow_iso(),
-                "updated_at": _utcnow_iso(),
-                "status": "deleted",
-                "shared": False,
-                # Move off the shared index (empty GSI keys are invalid in DynamoDB)
-                "GSI1PK": "ENTITY#MASTERY_DELETED",
-                "GSI1SK": mastery_id,
-            },
-        )
-        return
-
-    # Admin deleting someone else's shared pack via GSI lookup
-    if not is_admin:
+def update_mastery(
+    user_id: str,
+    mastery_id: str,
+    data: MasteryUpdate,
+    *,
+    is_admin: bool = False,
+) -> dict[str, Any]:
+    """Owner or admin updates a published mastery collection."""
+    item = _find_mastery_raw(mastery_id, viewer_id=user_id, is_admin=is_admin)
+    if not item or item.get("deleted_at"):
         raise MasteryNotFound(f"Mastery {mastery_id} not found")
-    shared_rows = db.query_gsi1(
-        keys.ENTITY_MASTERY_SHARED, sk_begins_with=mastery_id, limit=5
-    )
-    for item in shared_rows:
-        if item.get("mastery_id") != mastery_id:
-            continue
-        owner = item.get("user_id")
-        if not owner:
-            continue
-        db.update_item(
-            keys.user_pk(owner),
-            keys.mastery_sk(mastery_id),
-            {
-                "deleted_at": _utcnow_iso(),
-                "updated_at": _utcnow_iso(),
-                "status": "deleted",
-                "shared": False,
-                "GSI1PK": "ENTITY#MASTERY_DELETED",
-                "GSI1SK": mastery_id,
-            },
+    if not _can_manage(item, user_id, is_admin=is_admin):
+        raise MasteryForbidden("Not allowed to edit this mastery collection")
+
+    owner_id = item.get("user_id") or user_id
+    # Only admins may publish as shared; learners always stay personal
+    shared = bool(data.shared) if is_admin else False
+
+    subject_ids = list(data.subject_ids or [])
+    if not subject_ids:
+        subject_ids = resolve_subject_ids_for_topics(data.category, data.topics)
+    if len(subject_ids) < 1:
+        raise ValueError(
+            "No study subjects match the selected topics in this category"
         )
-        return
-    raise MasteryNotFound(f"Mastery {mastery_id} not found")
+
+    now = _utcnow_iso()
+    updates: dict[str, Any] = {
+        "name": data.name.strip(),
+        "category": data.category,
+        "topics": list(data.topics),
+        "subject_ids": subject_ids,
+        "start_date": data.start_date,
+        "end_date": data.end_date,
+        "shared": shared,
+        "status": "published",
+        "updated_at": now,
+    }
+    if shared:
+        updates["GSI1PK"] = keys.ENTITY_MASTERY_SHARED
+        updates["GSI1SK"] = mastery_id
+    else:
+        updates["GSI1PK"] = "ENTITY#MASTERY_DELETED"
+        updates["GSI1SK"] = mastery_id
+
+    updated = db.update_item(
+        keys.user_pk(owner_id), keys.mastery_sk(mastery_id), updates
+    )
+    return _public(updated, viewer_id=user_id, is_admin=is_admin)
+
+
+def soft_delete_mastery(user_id: str, mastery_id: str, *, is_admin: bool = False) -> None:
+    """Owner or any admin soft-deletes a collection."""
+    item = _find_mastery_raw(mastery_id, viewer_id=user_id, is_admin=is_admin)
+    if not item or item.get("deleted_at"):
+        raise MasteryNotFound(f"Mastery {mastery_id} not found")
+    if not _can_manage(item, user_id, is_admin=is_admin):
+        raise MasteryForbidden("Not allowed to delete this mastery collection")
+
+    owner_id = item.get("user_id") or user_id
+    db.update_item(
+        keys.user_pk(owner_id),
+        keys.mastery_sk(mastery_id),
+        {
+            "deleted_at": _utcnow_iso(),
+            "updated_at": _utcnow_iso(),
+            "status": "deleted",
+            "shared": False,
+            "GSI1PK": "ENTITY#MASTERY_DELETED",
+            "GSI1SK": mastery_id,
+        },
+    )
 
 
 def _parse_ymd(value: str | None) -> date | None:
@@ -236,10 +339,16 @@ def window_status(start_date: str | None, end_date: str | None, *, today: date |
     return "active"
 
 
-def _public(item: dict[str, Any], *, viewer_id: str | None = None) -> dict[str, Any]:
+def _public(
+    item: dict[str, Any],
+    *,
+    viewer_id: str | None = None,
+    is_admin: bool = False,
+) -> dict[str, Any]:
     start = item.get("start_date") or ""
     end = item.get("end_date") or ""
     owner = item.get("user_id")
+    is_owner = bool(viewer_id and owner == viewer_id)
     return {
         "mastery_id": item.get("mastery_id"),
         "name": item.get("name"),
@@ -251,7 +360,8 @@ def _public(item: dict[str, Any], *, viewer_id: str | None = None) -> dict[str, 
         "status": item.get("status") or "published",
         "shared": bool(item.get("shared")),
         "window_status": window_status(start, end),
-        "is_owner": bool(viewer_id and owner == viewer_id),
+        "is_owner": is_owner,
+        "can_manage": bool(is_owner or is_admin),
         "owner_id": owner,
         "created_at": item.get("created_at"),
         "published_at": item.get("published_at") or item.get("created_at"),
