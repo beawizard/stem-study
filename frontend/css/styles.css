@@ -495,6 +495,15 @@ button { cursor: pointer; min-height: var(--tap); }
   margin-top: 0.75rem;
   font-weight: 600;
 }
+.mastery-shared-note {
+  margin: 0.75rem 0 0 !important;
+  padding: 0.55rem 0.7rem;
+  border-radius: 10px;
+  background: #ecfdf5;
+  border: 1px solid #99f6e4;
+  color: var(--brand-dark);
+  font-size: 0.9rem;
+}
 .mastery-review {
   margin-top: 0.75rem;
   padding: 0.65rem 0.75rem;

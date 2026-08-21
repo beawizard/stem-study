@@ -130,8 +130,11 @@ def create_mastery(
     *,
     is_admin: bool = False,
 ) -> dict[str, Any]:
-    """Create and publish a mastery collection for the learner (or shared if admin)."""
-    shared = bool(data.shared) and bool(is_admin)
+    """Create and publish a mastery collection.
+
+    Admin-created packs are always shared with every learner. Learner packs stay personal.
+    """
+    shared = bool(is_admin)
     subject_ids = list(data.subject_ids or [])
     if not subject_ids:
         subject_ids = resolve_subject_ids_for_topics(data.category, data.topics)
@@ -258,8 +261,14 @@ def update_mastery(
         raise MasteryForbidden("Not allowed to edit this mastery collection")
 
     owner_id = item.get("user_id") or user_id
-    # Only admins may publish as shared; learners always stay personal
-    shared = bool(data.shared) if is_admin else False
+    # Admin-owned packs stay visible to all learners. Learners stay personal
+    # unless an admin explicitly marks shared on update.
+    if not is_admin:
+        shared = False
+    elif item.get("user_id") == user_id:
+        shared = True
+    else:
+        shared = bool(data.shared) or bool(item.get("shared"))
 
     subject_ids = list(data.subject_ids or [])
     if not subject_ids:

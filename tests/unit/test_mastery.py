@@ -60,17 +60,26 @@ def test_shared_mastery_visible_to_all(dynamodb_table):
         end_date="2026-12-31",
         shared=True,
     )
-    # Non-admin shared flag is ignored
+    # Non-admin shared flag is ignored — personal only
     personal = mastery_service.create_mastery("learner", data, is_admin=False)
     assert personal["shared"] is False
     assert mastery_service.list_mastery_for_user("other") == []
 
-    shared = mastery_service.create_mastery("admin-1", data, is_admin=True)
+    # Admin create is always shared, even without shared=True
+    admin_data = MasteryCreate(
+        name="School Pack Auto",
+        category="Mathematics",
+        topics=["Arithmetic (Addition)", "Fractions"],
+        start_date="2026-01-01",
+        end_date="2026-12-31",
+        shared=False,
+    )
+    shared = mastery_service.create_mastery("admin-1", admin_data, is_admin=True)
     assert shared["shared"] is True
     others = mastery_service.list_mastery_for_user("other")
     assert any(c["mastery_id"] == shared["mastery_id"] for c in others)
     got = mastery_service.get_mastery("other", shared["mastery_id"])
-    assert got["name"] == "School Pack"
+    assert got["name"] == "School Pack Auto"
 
 
 @pytest.mark.unit

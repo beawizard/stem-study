@@ -3762,12 +3762,7 @@ const App = (() => {
         </div>
         ${
           isAdmin
-            ? `<label class="mastery-shared-label">
-                <input type="checkbox" id="mastery-shared" ${
-                  draft.shared ? "checked" : ""
-                } />
-                Share with all learners (admin)
-              </label>`
+            ? `<p class="mastery-shared-note">As admin, this collection is <strong>visible to all learners</strong> on their Mastery page.</p>`
             : ""
         }
         <p class="muted">Publishing makes this collection appear at the top of the Mastery page.</p>
@@ -3995,8 +3990,7 @@ const App = (() => {
         document.getElementById("mastery-start")?.value || draft.start_date;
       draft.end_date =
         document.getElementById("mastery-end")?.value || draft.end_date;
-      const sharedEl = document.getElementById("mastery-shared");
-      draft.shared = !!(sharedEl && sharedEl.checked);
+      draft.shared = typeof Auth.isAdmin === "function" && Auth.isAdmin();
       if (!draft.start_date || !draft.end_date) {
         toast("Choose start and end dates", true);
         return false;
