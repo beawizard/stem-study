@@ -1630,20 +1630,20 @@ const App = (() => {
         <div class="card study-landing-card">
           <div class="study-header">
             <div class="study-header-main">
-              <h1 class="study-page-title">Study</h1>
+              <div class="study-title-row">
+                <h1 class="study-page-title">Study</h1>
+                ${
+                  gradeLabel
+                    ? `<div class="study-grade-badge" title="Content grade level">${escapeHtml(
+                        gradeLabel
+                      )}</div>`
+                    : ""
+                }
+              </div>
               <div class="study-pickers study-pickers-stacked">
-                <div class="study-picker-field study-category-grade-row">
-                  <div class="study-category-wrap">
-                    <label for="study-category">Category</label>
-                    <select id="study-category">${categoryOptions}</select>
-                  </div>
-                  ${
-                    gradeLabel
-                      ? `<div class="study-grade-badge" title="Content grade level">${escapeHtml(
-                          gradeLabel
-                        )}</div>`
-                      : ""
-                  }
+                <div class="study-picker-field">
+                  <label for="study-category">Category</label>
+                  <select id="study-category">${categoryOptions}</select>
                 </div>
                 <div class="study-picker-field">
                   <label for="study-topic">Topic</label>
