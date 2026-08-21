@@ -105,6 +105,17 @@ const Api = (() => {
     createTask: (token, body) => request("/tasks", { method: "POST", body, token }),
     updateTask: (token, id, body) => request(`/tasks/${id}`, { method: "PUT", body, token }),
     deleteTask: (token, id) => request(`/tasks/${id}`, { method: "DELETE", token }),
+    /** Published mastery collections (personal + admin-shared). */
+    listMastery: (token) => request("/mastery", { token }),
+    createMastery: (token, body) =>
+      request("/mastery", { method: "POST", body, token }),
+    getMastery: (token, masteryId) =>
+      request(`/mastery/${encodeURIComponent(masteryId)}`, { token }),
+    deleteMastery: (token, masteryId) =>
+      request(`/mastery/${encodeURIComponent(masteryId)}`, {
+        method: "DELETE",
+        token,
+      }),
     listSubjects: (token) => request("/subjects", { token }),
     listLevels: (token, subjectId) => request(`/subjects/${subjectId}/levels`, { token }),
     listQuestions: (token, subjectId, levelId, includeAnswers = false) =>

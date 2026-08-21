@@ -8,6 +8,7 @@ USER#<sub>          / PROGRESS#<subject>#L#<level>
 USER#<sub>          / SESSION#<session_id>      study session
 USER#<sub>          / ATTEMPT#<session>#Q#<qid> answer attempt
 USER#<sub>          / PAYMENT#<payment_id>      GCash payment record
+USER#<sub>          / MASTERY#<id>              mastery topic collection
 SUBJECT#<id>        / META                      subject definition
 SUBJECT#<id>        / LEVEL#<level_id>          level definition
 SUBJECT#<id>        / LEVEL#<level_id>#Q#<qid>  question
@@ -68,6 +69,11 @@ def payment_sk(payment_id: str) -> str:
     return f"PAYMENT#{payment_id}"
 
 
+def mastery_sk(mastery_id: str) -> str:
+    """Per-user mastery collection under USER#… / MASTERY#…"""
+    return f"MASTERY#{mastery_id}"
+
+
 def subject_pk(subject_id: str) -> str:
     return f"SUBJECT#{subject_id}"
 
@@ -93,6 +99,8 @@ ENTITY_SCHOOL = "ENTITY#SCHOOL"
 # Leaderboard: GSI1PK=ENTITY#LEADERBOARD, GSI1SK=<inverted_xp:010d>#<user_id>
 # (lower inverted sort key = higher XP so ascending GSI query returns top ranks first)
 ENTITY_LEADERBOARD = "ENTITY#LEADERBOARD"
+# Admin-shared mastery packs visible to all learners
+ENTITY_MASTERY_SHARED = "ENTITY#MASTERY_SHARED"
 _LEADERBOARD_XP_PAD = 999_999_999
 
 

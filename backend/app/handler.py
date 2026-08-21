@@ -31,6 +31,8 @@ Routes (all require Cognito JWT unless noted):
   GET               /study/bootstrap?subject_id=   (subjects + landing, one round-trip)
   GET               /insights   (?notices=1 optional; default skips content_notices)
   GET               /leaderboard                 (top 100 by XP: Rank, Name, XP, Grade)
+  GET|POST          /mastery                     (list published / create+publish collection)
+  GET|DELETE        /mastery/{mastery_id}
   POST              /payments
   GET               /payments
   GET               /admin/payments              (admin)
@@ -60,6 +62,7 @@ from app.response import (
 )
 from app.services import (
     insights_service,
+    mastery_service,
     payment_service,
     school_service,
     study_service,
@@ -67,6 +70,7 @@ from app.services import (
     task_service,
     user_service,
 )
+from app.services.mastery_service import MasteryForbidden, MasteryNotFound
 from app.services.payment_service import PaymentError, PaymentNotFound
 from app.services.school_service import SchoolConflict, SchoolNotFound
 from app.services.study_service import ProgressLocked, StudyError
@@ -83,6 +87,7 @@ from app.validation import (
     FacebookFollowClaim,
     LevelCreate,
     LevelUpdate,
+    MasteryCreate,
     PaymentSubmit,
     PaymentVerify,
     ProfileUpdate,
@@ -105,6 +110,7 @@ logger.setLevel(logging.INFO)
 
 # path param patterns
 _TASK_ID = re.compile(r"^/tasks/([^/]+)$")
+_MASTERY_ID = re.compile(r"^/mastery/([^/]+)$")
 _SUBJECT_ID = re.compile(r"^/subjects/([^/]+)$")
 _SUBJECT_LEVELS = re.compile(r"^/subjects/([^/]+)/levels$")
 _SUBJECT_LEVEL = re.compile(r"^/subjects/([^/]+)/levels/([^/]+)$")
@@ -313,6 +319,40 @@ def _route(
                 return no_content()
             except SchoolNotFound:
                 return not_found("School not found")
+
+    # --- Mastery collections ---
+    if method == "GET" and path == "/mastery":
+        return ok({"collections": mastery_service.list_mastery_for_user(user.user_id)})
+
+    if method == "POST" and path == "/mastery":
+        data = parse_body(MasteryCreate, body)
+        try:
+            return created(
+                mastery_service.create_mastery(
+                    user.user_id, data, is_admin=user.is_admin
+                )
+            )
+        except ValueError as exc:
+            return bad_request(str(exc))
+
+    m_mastery = _MASTERY_ID.match(path)
+    if m_mastery:
+        mastery_id = unquote(m_mastery.group(1))
+        if method == "GET":
+            try:
+                return ok(mastery_service.get_mastery(user.user_id, mastery_id))
+            except MasteryNotFound:
+                return not_found("Mastery collection not found")
+        if method == "DELETE":
+            try:
+                mastery_service.soft_delete_mastery(
+                    user.user_id, mastery_id, is_admin=user.is_admin
+                )
+                return no_content()
+            except MasteryNotFound:
+                return not_found("Mastery collection not found")
+            except MasteryForbidden:
+                return forbidden("Not allowed to delete this mastery collection")
 
     # --- Tasks ---
     if method == "GET" and path == "/tasks":

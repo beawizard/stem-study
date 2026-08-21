@@ -369,6 +369,121 @@ button { cursor: pointer; min-height: var(--tap); }
 .leaderboard-table tbody tr:nth-child(2) .lb-rank { color: #64748b; }
 .leaderboard-table tbody tr:nth-child(3) .lb-rank { color: #c2410c; }
 
+/* Mastery hub / create wizard */
+.mastery-hub-header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem 0.75rem;
+  margin-bottom: 0.35rem;
+}
+.mastery-hub-header h1 {
+  margin: 0;
+}
+.mastery-section-title {
+  margin: 1rem 0 0.5rem;
+  font-size: 1rem;
+}
+.mastery-chip-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+.mastery-chip {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.35rem;
+  min-height: 2.4rem;
+  padding: 0.35rem 0.75rem;
+  border-radius: 999px;
+  text-align: left;
+}
+.mastery-chip-name {
+  font-weight: 700;
+}
+.mastery-steps {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+  margin: 0.5rem 0 0.85rem;
+}
+.mastery-step-dot {
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+  padding: 0.25rem 0.55rem;
+  border-radius: 999px;
+  background: #e2e8f0;
+  color: var(--muted);
+}
+.mastery-step-dot.active {
+  background: var(--brand);
+  color: #fff;
+}
+.mastery-step-dot.done {
+  background: #ccfbf1;
+  color: var(--brand-dark);
+}
+.mastery-topics-wrap {
+  max-height: min(18rem, 50vh);
+  overflow: auto;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+}
+.mastery-topics-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.9rem;
+}
+.mastery-topics-table th,
+.mastery-topics-table td {
+  padding: 0.45rem 0.55rem;
+  border-bottom: 1px solid var(--border);
+  text-align: left;
+}
+.mastery-topics-table th {
+  position: sticky;
+  top: 0;
+  background: #f0fdfa;
+  font-size: 0.72rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--muted);
+}
+.mastery-check-cell {
+  width: 2.25rem;
+  text-align: center;
+}
+.mastery-dates {
+  gap: 0.75rem;
+}
+.mastery-dates > div {
+  flex: 1 1 8rem;
+}
+.mastery-shared-label {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  margin-top: 0.75rem;
+  font-weight: 600;
+}
+.mastery-review {
+  margin-top: 0.75rem;
+  padding: 0.65rem 0.75rem;
+  border-radius: 10px;
+  background: #f0fdfa;
+  border: 1px solid var(--border);
+}
+.mastery-wizard-actions {
+  justify-content: space-between;
+}
+.mastery-study-card .btn-sm {
+  margin-bottom: 0.15rem;
+}
+
 .main { max-width: 720px; margin: 0 auto; padding: 1rem 1rem 3rem; }
 
 /* ---------- Kid-friendly MElon loading screen ---------- */

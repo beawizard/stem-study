@@ -35,6 +35,20 @@ const App = (() => {
     assessmentPreview: null,
     /** Cached Home leaderboard rows for CSV download */
     leaderboardEntries: [],
+    /** Mastery hub / create wizard / study-within-collection */
+    masteryView: "hub", // hub | create | study
+    masteryCreateStep: 1,
+    masteryDraft: {
+      name: "",
+      category: "",
+      topics: [],
+      start_date: "",
+      end_date: "",
+      shared: false,
+    },
+    masteryCollections: [],
+    masteryActive: null, // selected published collection
+    masterySubjectId: null, // topic (subject) within active collection
   };
 
   /**
@@ -371,7 +385,10 @@ const App = (() => {
     if (profileBtn) {
       profileBtn.classList.toggle(
         "is-active-route",
-        route === "account" || route === "profile" || route === "facebook"
+        route === "account" ||
+          route === "profile" ||
+          route === "mastery" ||
+          route === "facebook"
       );
     }
     render();
@@ -487,7 +504,11 @@ const App = (() => {
         closeProfileMenu();
         if (action === "account") navigate("account");
         else if (action === "profile") navigate("profile");
-        else if (action === "facebook") navigate("facebook");
+        else if (action === "mastery") {
+          state.masteryView = "hub";
+          state.masteryActive = null;
+          navigate("mastery");
+        } else if (action === "facebook") navigate("facebook");
         else if (action === "logout") doLogout();
       });
     });
@@ -3441,6 +3462,590 @@ const App = (() => {
     return data;
   }
 
+  /* ---------- Mastery (topic collections → Study-like flow) ---------- */
+
+  function resetMasteryDraft() {
+    const today = new Date();
+    const end = new Date(today);
+    end.setDate(end.getDate() + 30);
+    const iso = (d) => d.toISOString().slice(0, 10);
+    state.masteryDraft = {
+      name: "",
+      category: "",
+      topics: [],
+      start_date: iso(today),
+      end_date: iso(end),
+      shared: false,
+    };
+    state.masteryCreateStep = 1;
+  }
+
+  function masteryTopicGroups(allSubjects, category) {
+    const groups = new Map();
+    for (const s of allSubjects || []) {
+      if ((s.category || "Mathematics") !== category) continue;
+      const base = baseTopicName(s.topic || s.name || "") || s.subject_id;
+      if (!groups.has(base)) {
+        groups.set(base, { topic: base, subject_ids: [], count: 0 });
+      }
+      const g = groups.get(base);
+      g.subject_ids.push(s.subject_id);
+      g.count += 1;
+    }
+    return [...groups.values()].sort((a, b) =>
+      a.topic.localeCompare(b.topic)
+    );
+  }
+
+  async function viewMastery() {
+    // Active quiz / results from a mastery collection reuse Study session UI
+    if (
+      state.masteryView === "study" &&
+      state.session &&
+      state.studyPhase &&
+      !state.session.is_assessment
+    ) {
+      if (state.studyPhase === "results" && state.studyResults) {
+        return viewStudyResults(state.studyResults);
+      }
+      return viewSession();
+    }
+
+    if (state.masteryView === "create") {
+      return viewMasteryCreate();
+    }
+    if (state.masteryView === "study" && state.masteryActive) {
+      return viewMasteryStudy();
+    }
+    return viewMasteryHub();
+  }
+
+  async function viewMasteryHub() {
+    let collections = [];
+    try {
+      const data = await Api.listMastery(token());
+      collections = data.collections || [];
+      state.masteryCollections = collections;
+    } catch (e) {
+      return `<div class="card"><h1>Mastery</h1>
+        <p class="muted">${escapeHtml(e.message || "Could not load collections")}</p></div>`;
+    }
+
+    const chips = collections.length
+      ? collections
+          .map((c) => {
+            const win = c.window_status || "active";
+            const badge =
+              win === "upcoming"
+                ? `<span class="badge warn">Upcoming</span>`
+                : win === "ended"
+                  ? `<span class="badge err">Ended</span>`
+                  : `<span class="badge ok">Active</span>`;
+            const shared = c.shared
+              ? `<span class="badge subject-tag">Shared</span>`
+              : "";
+            return `<button type="button" class="btn mastery-chip ${
+              win === "ended" ? "secondary" : ""
+            }" data-mastery-open="${escapeAttr(c.mastery_id)}">
+              <span class="mastery-chip-name">${escapeHtml(c.name || "Untitled")}</span>
+              ${shared}${badge}
+            </button>`;
+          })
+          .join("")
+      : `<p class="muted">No published mastery collections yet. Create one to get started.</p>`;
+
+    return `
+      <div class="card mastery-hub-card">
+        <div class="mastery-hub-header">
+          <h1>Mastery</h1>
+          <button type="button" class="btn accent" id="btn-mastery-create">+ Create</button>
+        </div>
+        <p class="muted">Build a collection of topics, set dates, and study them like the Study page. Scores, XP, and times count toward your normal Study progress.</p>
+        <h2 class="mastery-section-title">Published collections</h2>
+        <div class="mastery-chip-row" role="list">${chips}</div>
+      </div>`;
+  }
+
+  async function viewMasteryCreate() {
+    const step = Math.min(4, Math.max(1, Number(state.masteryCreateStep) || 1));
+    state.masteryCreateStep = step;
+    if (!state.masteryDraft) resetMasteryDraft();
+    const draft = state.masteryDraft;
+    const isAdmin = typeof Auth.isAdmin === "function" && Auth.isAdmin();
+
+    let allSubjects = [];
+    try {
+      const tok = token();
+      allSubjects = await StudyCache.loadSubjects(tok);
+    } catch {
+      allSubjects = [];
+    }
+
+    const stemOrder = ["Science", "Technology", "Engineering", "Mathematics"];
+    const categoriesPresent = [
+      ...new Set(
+        allSubjects.map((s) => s.category || "Mathematics").filter(Boolean)
+      ),
+    ];
+    categoriesPresent.sort((a, b) => {
+      const ia = stemOrder.indexOf(a);
+      const ib = stemOrder.indexOf(b);
+      if (ia === -1 && ib === -1) return a.localeCompare(b);
+      if (ia === -1) return 1;
+      if (ib === -1) return -1;
+      return ia - ib;
+    });
+    if (!draft.category && categoriesPresent.length) {
+      draft.category =
+        categoriesPresent.find((c) => c === "Mathematics") || categoriesPresent[0];
+    }
+
+    const stepsHtml = [1, 2, 3, 4]
+      .map(
+        (n) =>
+          `<span class="mastery-step-dot ${n === step ? "active" : n < step ? "done" : ""}">Step ${n}</span>`
+      )
+      .join("");
+
+    let body = "";
+    if (step === 1) {
+      body = `
+        <label for="mastery-name">Collection name</label>
+        <input id="mastery-name" type="text" maxlength="80" required
+          value="${escapeAttr(draft.name || "")}"
+          placeholder="e.g. Grade 5 fluency pack" />
+        <p class="muted">Give this mastery set a clear name learners will recognize.</p>`;
+    } else if (step === 2) {
+      const opts = categoriesPresent.length
+        ? categoriesPresent
+            .map(
+              (c) =>
+                `<option value="${escapeAttr(c)}" ${
+                  c === draft.category ? "selected" : ""
+                }>${escapeHtml(c)}</option>`
+            )
+            .join("")
+        : `<option value="">No categories available</option>`;
+      body = `
+        <label for="mastery-category">Category</label>
+        <select id="mastery-category">${opts}</select>
+        <p class="muted">Topics in the next step come from this category.</p>`;
+    } else if (step === 3) {
+      const groups = masteryTopicGroups(allSubjects, draft.category);
+      const selected = new Set(
+        (draft.topics || []).map((t) => String(t).toLowerCase())
+      );
+      const rows = groups.length
+        ? groups
+            .map((g) => {
+              const checked = selected.has(String(g.topic).toLowerCase())
+                ? "checked"
+                : "";
+              return `<tr>
+                <td class="mastery-check-cell">
+                  <input type="checkbox" class="mastery-topic-cb" data-topic="${escapeAttr(
+                    g.topic
+                  )}" ${checked} />
+                </td>
+                <td>${escapeHtml(g.topic)}</td>
+                <td class="muted">${g.count} set(s)</td>
+              </tr>`;
+            })
+            .join("")
+        : `<tr><td colspan="3" class="muted">No topics in this category.</td></tr>`;
+      body = `
+        <p class="muted">Select <strong>at least 2 topics</strong> for <strong>${escapeHtml(
+          draft.category || "—"
+        )}</strong>.</p>
+        <div class="table-wrap mastery-topics-wrap">
+          <table class="mastery-topics-table" aria-label="Select topics">
+            <thead>
+              <tr>
+                <th scope="col" class="mastery-check-cell">
+                  <input type="checkbox" id="mastery-topic-all" title="Select all" aria-label="Select all topics" />
+                </th>
+                <th scope="col">Topic</th>
+                <th scope="col">Sets</th>
+              </tr>
+            </thead>
+            <tbody>${rows}</tbody>
+          </table>
+        </div>`;
+    } else {
+      body = `
+        <div class="row mastery-dates">
+          <div>
+            <label for="mastery-start">Start date</label>
+            <input id="mastery-start" type="date" value="${escapeAttr(
+              draft.start_date || ""
+            )}" required />
+          </div>
+          <div>
+            <label for="mastery-end">End date</label>
+            <input id="mastery-end" type="date" value="${escapeAttr(
+              draft.end_date || ""
+            )}" required />
+          </div>
+        </div>
+        ${
+          isAdmin
+            ? `<label class="mastery-shared-label">
+                <input type="checkbox" id="mastery-shared" ${
+                  draft.shared ? "checked" : ""
+                } />
+                Share with all learners (admin)
+              </label>`
+            : ""
+        }
+        <p class="muted">Publishing makes this collection appear at the top of the Mastery page.</p>
+        <div class="mastery-review muted">
+          <div><strong>${escapeHtml(draft.name || "Untitled")}</strong></div>
+          <div>${escapeHtml(draft.category || "—")} · ${(draft.topics || []).length} topic(s)</div>
+          <div>${escapeHtml((draft.topics || []).join(", ") || "—")}</div>
+        </div>`;
+    }
+
+    const backLabel = step === 1 ? "Cancel" : "Back";
+    const nextLabel = step === 4 ? "Publish" : "Next";
+
+    return `
+      <div class="card mastery-create-card">
+        <h1>Create Mastery</h1>
+        <div class="mastery-steps">${stepsHtml}</div>
+        <div class="stack mastery-step-body">${body}</div>
+        <div class="row mastery-wizard-actions" style="margin-top:1rem">
+          <button type="button" class="btn secondary" id="btn-mastery-back">${backLabel}</button>
+          <button type="button" class="btn accent" id="btn-mastery-next">${nextLabel}</button>
+        </div>
+      </div>`;
+  }
+
+  async function viewMasteryStudy() {
+    const collection = state.masteryActive;
+    if (!collection) {
+      state.masteryView = "hub";
+      return viewMasteryHub();
+    }
+    try {
+      const tok = token();
+      const { subjects: allSubjects } = await StudyCache.loadStudyData(tok, null);
+      const allowed = new Set(collection.subject_ids || []);
+      const topicsInCollection = allSubjects
+        .filter((s) => allowed.has(s.subject_id))
+        .slice()
+        .sort((a, b) => {
+          const ao = Number(a.sort_order) || 0;
+          const bo = Number(b.sort_order) || 0;
+          if (ao !== bo) return ao - bo;
+          return String(a.topic || a.name || "").localeCompare(
+            String(b.topic || b.name || "")
+          );
+        });
+
+      if (!topicsInCollection.length) {
+        return `<div class="card">
+          <button type="button" class="btn secondary btn-sm" data-mastery-hub>← Mastery</button>
+          <h1>${escapeHtml(collection.name || "Mastery")}</h1>
+          <p class="muted">No matching topics found for this collection.</p>
+        </div>`;
+      }
+
+      if (
+        !state.masterySubjectId ||
+        !topicsInCollection.some((s) => s.subject_id === state.masterySubjectId)
+      ) {
+        state.masterySubjectId = topicsInCollection[0].subject_id;
+      }
+      // Keep Study pickers in sync so Start buttons / caches stay consistent
+      state.studyCategory = collection.category || topicsInCollection[0].category;
+      state.studySubjectId = state.masterySubjectId;
+
+      const selected =
+        topicsInCollection.find((s) => s.subject_id === state.masterySubjectId) ||
+        topicsInCollection[0];
+
+      let landing = StudyCache.getLanding(selected.subject_id);
+      if (!landing) {
+        landing = await Api.studyLanding(tok, selected.subject_id);
+        StudyCache.setLanding(selected.subject_id, landing);
+      }
+      const levels = (landing && landing.levels) || [];
+      const progMap = Object.fromEntries(
+        ((landing && landing.progress) || []).map((p) => [
+          `${p.subject_id}:${p.level_id}`,
+          p,
+        ])
+      );
+      const radarProgressRows = (landing && landing.progress_rows) || [];
+
+      const topicOptions = topicsInCollection
+        .map(
+          (s) =>
+            `<option value="${escapeAttr(s.subject_id)}" ${
+              s.subject_id === selected.subject_id ? "selected" : ""
+            }>${escapeHtml(s.topic || s.name || s.subject_id)}</option>`
+        )
+        .join("");
+
+      const items = levels
+        .map((lv) => {
+          const pr = progMap[`${selected.subject_id}:${lv.level_id}`];
+          const statusCls = pr
+            ? pr.status === "completed"
+              ? "ok"
+              : pr.status === "failed"
+                ? "err"
+                : "warn"
+            : "";
+          return `
+          <div class="level-item">
+            <div class="grow">
+              <div class="title">
+                <strong>${escapeHtml(lv.name)}</strong>
+                ${
+                  pr
+                    ? `<span class="badge ${statusCls}">${escapeHtml(pr.status)}</span>`
+                    : `<span class="badge">new</span>`
+                }
+                ${speedBadgeHtml(pr && pr.status === "completed" ? pr : null)}
+              </div>
+              <div class="muted">${lv.question_count || 0} questions · pass ≥ ${Math.round(
+                (lv.pass_accuracy || 0.8) * 100
+              )}%
+                ${
+                  pr && pr.best_elapsed_ms != null
+                    ? ` · best ⏱ ${formatDuration(pr.best_elapsed_ms)}`
+                    : ""
+                }
+              </div>
+            </div>
+            <button class="btn" type="button"
+              data-start="${escapeHtml(selected.subject_id)}"
+              data-level="${escapeHtml(lv.level_id)}">Start</button>
+          </div>`;
+        })
+        .join("");
+
+      const radarHtml = performanceRadarHtml({
+        subjects: allSubjects,
+        progressRows: radarProgressRows,
+        focus: { subjectId: selected.subject_id },
+        size: 168,
+        showCaption: true,
+      });
+
+      const win = collection.window_status || "active";
+      const windowNote =
+        win === "upcoming"
+          ? `<p class="muted">Starts ${escapeHtml(collection.start_date || "")}.</p>`
+          : win === "ended"
+            ? `<p class="muted">Ended ${escapeHtml(collection.end_date || "")}. You can still practice; progress still counts.</p>`
+            : `<p class="muted">${escapeHtml(collection.start_date || "")} → ${escapeHtml(
+                collection.end_date || ""
+              )}</p>`;
+
+      return `
+        <div class="card study-landing-card mastery-study-card">
+          <button type="button" class="btn secondary btn-sm" data-mastery-hub>← Mastery</button>
+          <div class="study-header" style="margin-top:0.5rem">
+            <div class="study-header-main">
+              <h1 class="study-page-title">${escapeHtml(collection.name || "Mastery")}</h1>
+              <p class="muted">${escapeHtml(collection.category || "")} · ${(
+                collection.topics || []
+              ).length} topic(s)</p>
+              ${windowNote}
+              <div class="study-pickers study-pickers-stacked">
+                <div class="study-picker-field">
+                  <label for="mastery-study-topic">Topic</label>
+                  <select id="mastery-study-topic">${topicOptions}</select>
+                </div>
+              </div>
+            </div>
+            <div class="study-radar">${radarHtml}</div>
+          </div>
+          <div class="study-levels">
+            ${items || "<p class='muted'>No levels configured for this topic.</p>"}
+          </div>
+        </div>`;
+    } catch (e) {
+      if (e.status === 402) return viewPaywall(e.message);
+      return `<div class="card"><h1>Mastery</h1><p class="muted">${escapeHtml(
+        e.message || String(e)
+      )}</p></div>`;
+    }
+  }
+
+  function captureMasteryCreateStep() {
+    const draft = state.masteryDraft;
+    const step = state.masteryCreateStep;
+    if (step === 1) {
+      draft.name = (
+        document.getElementById("mastery-name")?.value || ""
+      ).trim();
+      if (!draft.name) {
+        toast("Enter a collection name", true);
+        return false;
+      }
+    } else if (step === 2) {
+      draft.category =
+        document.getElementById("mastery-category")?.value || draft.category;
+      if (!draft.category) {
+        toast("Select a category", true);
+        return false;
+      }
+      // Changing category clears prior topic picks
+      draft.topics = [];
+    } else if (step === 3) {
+      const picked = [];
+      main()
+        .querySelectorAll(".mastery-topic-cb:checked")
+        .forEach((cb) => {
+          const t = cb.getAttribute("data-topic");
+          if (t) picked.push(t);
+        });
+      draft.topics = picked;
+      if (picked.length < 2) {
+        toast("Select at least 2 topics", true);
+        return false;
+      }
+    } else if (step === 4) {
+      draft.start_date =
+        document.getElementById("mastery-start")?.value || draft.start_date;
+      draft.end_date =
+        document.getElementById("mastery-end")?.value || draft.end_date;
+      const sharedEl = document.getElementById("mastery-shared");
+      draft.shared = !!(sharedEl && sharedEl.checked);
+      if (!draft.start_date || !draft.end_date) {
+        toast("Choose start and end dates", true);
+        return false;
+      }
+      if (draft.end_date < draft.start_date) {
+        toast("End date must be on or after start date", true);
+        return false;
+      }
+    }
+    return true;
+  }
+
+  function bindMasteryPage() {
+    const createBtn = document.getElementById("btn-mastery-create");
+    if (createBtn) {
+      createBtn.onclick = () => {
+        resetMasteryDraft();
+        state.masteryView = "create";
+        state.masteryCreateStep = 1;
+        render();
+      };
+    }
+
+    main().querySelectorAll("[data-mastery-open]").forEach((btn) => {
+      btn.onclick = async () => {
+        const id = btn.getAttribute("data-mastery-open");
+        try {
+          const col =
+            (state.masteryCollections || []).find((c) => c.mastery_id === id) ||
+            (await Api.getMastery(token(), id));
+          state.masteryActive = col;
+          state.masterySubjectId = null;
+          state.masteryView = "study";
+          render();
+        } catch (e) {
+          toast(e.message || String(e), true);
+        }
+      };
+    });
+
+    main().querySelectorAll("[data-mastery-hub]").forEach((btn) => {
+      btn.onclick = () => {
+        state.masteryView = "hub";
+        state.masteryActive = null;
+        // If leaving mid-quiz, clear session UI mode
+        if (state.studyPhase && state.session && !state.session.is_assessment) {
+          // keep session? Better clear when returning to hub without finishing
+        }
+        render();
+      };
+    });
+
+    const topicSel = document.getElementById("mastery-study-topic");
+    if (topicSel) {
+      topicSel.onchange = () => {
+        state.masterySubjectId = topicSel.value || null;
+        state.studySubjectId = state.masterySubjectId;
+        render();
+      };
+    }
+
+    const back = document.getElementById("btn-mastery-back");
+    const next = document.getElementById("btn-mastery-next");
+    if (back) {
+      back.onclick = () => {
+        if (state.masteryCreateStep <= 1) {
+          state.masteryView = "hub";
+          render();
+          return;
+        }
+        captureMasteryCreateStep();
+        state.masteryCreateStep -= 1;
+        render();
+      };
+    }
+    if (next) {
+      next.onclick = async () => {
+        if (!captureMasteryCreateStep()) return;
+        if (state.masteryCreateStep < 4) {
+          state.masteryCreateStep += 1;
+          render();
+          return;
+        }
+        // Publish
+        const draft = state.masteryDraft;
+        next.disabled = true;
+        next.textContent = "Publishing…";
+        try {
+          const created = await Api.createMastery(token(), {
+            name: draft.name,
+            category: draft.category,
+            topics: draft.topics,
+            start_date: draft.start_date,
+            end_date: draft.end_date,
+            shared: !!draft.shared,
+          });
+          toast(`Published “${created.name}”`);
+          state.masteryView = "hub";
+          state.masteryActive = null;
+          render();
+        } catch (e) {
+          toast(e.message || String(e), true);
+          next.disabled = false;
+          next.textContent = "Publish";
+        }
+      };
+    }
+
+    const selectAll = document.getElementById("mastery-topic-all");
+    if (selectAll) {
+      const boxes = () =>
+        Array.from(main().querySelectorAll(".mastery-topic-cb"));
+      selectAll.onchange = () => {
+        boxes().forEach((cb) => {
+          cb.checked = selectAll.checked;
+        });
+      };
+      // Indeterminate sync
+      const syncAll = () => {
+        const all = boxes();
+        const n = all.filter((c) => c.checked).length;
+        selectAll.checked = all.length > 0 && n === all.length;
+        selectAll.indeterminate = n > 0 && n < all.length;
+      };
+      boxes().forEach((cb) => {
+        cb.onchange = syncAll;
+      });
+      syncAll();
+    }
+  }
+
   /* ---------- Loading (kid-friendly MElon animation) ---------- */
 
   function loadingMessageForRoute(route) {
@@ -3459,6 +4064,8 @@ const App = (() => {
         return "Opening Account…";
       case "profile":
         return "Opening Profile…";
+      case "mastery":
+        return "Opening Mastery…";
       case "facebook":
         return "Opening Facebook…";
       case "admin":
@@ -3854,6 +4461,7 @@ const App = (() => {
       case "insights": html = await viewInsights(); break;
       case "account": html = await viewAccount(); break;
       case "profile": html = await viewProfile(); break;
+      case "mastery": html = await viewMastery(); break;
       case "facebook": html = await viewFacebook(); break;
       case "admin": html = await viewAdmin(); break;
       case "pay": html = viewPaywall(); break;
@@ -3882,6 +4490,9 @@ const App = (() => {
     }
     if (state.route === "profile") {
       bindProfileForm();
+    }
+    if (state.route === "mastery") {
+      bindMasteryPage();
     }
     if (state.route === "facebook") {
       bindFacebookPage();

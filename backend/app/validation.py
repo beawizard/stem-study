@@ -121,6 +121,90 @@ class TaskCreate(BaseModel):
         return v
 
 
+_DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+
+
+class MasteryCreate(BaseModel):
+    """POST /mastery — publish a mastery collection (personal or admin-shared)."""
+
+    model_config = ConfigDict(str_strip_whitespace=True, extra="forbid")
+
+    name: str = Field(..., min_length=1, max_length=80)
+    category: str = Field(..., min_length=1, max_length=32)
+    topics: list[str] = Field(..., min_length=2, max_length=100)
+    subject_ids: list[str] = Field(default_factory=list, max_length=200)
+    start_date: str = Field(..., min_length=10, max_length=10)
+    end_date: str = Field(..., min_length=10, max_length=10)
+    # Admin-only: when true, collection appears for all learners
+    shared: bool = False
+
+    @field_validator("category")
+    @classmethod
+    def validate_category(cls, v: str) -> str:
+        for cat in STEM_CATEGORIES:
+            if v.lower() == cat.lower():
+                return cat
+        raise ValueError(f"category must be one of: {', '.join(STEM_CATEGORIES)}")
+
+    @field_validator("topics")
+    @classmethod
+    def validate_topics(cls, v: list[str]) -> list[str]:
+        cleaned: list[str] = []
+        seen: set[str] = set()
+        for raw in v or []:
+            t = str(raw or "").strip()
+            if not t:
+                continue
+            if len(t) > 100:
+                raise ValueError("topic names must be at most 100 characters")
+            key = t.lower()
+            if key in seen:
+                continue
+            seen.add(key)
+            cleaned.append(t)
+        if len(cleaned) < 2:
+            raise ValueError("Select at least 2 topics")
+        return cleaned
+
+    @field_validator("subject_ids")
+    @classmethod
+    def validate_subject_ids(cls, v: list[str]) -> list[str]:
+        out: list[str] = []
+        seen: set[str] = set()
+        for raw in v or []:
+            sid = str(raw or "").strip()
+            if not sid:
+                continue
+            if not SUBJECT_ID_PATTERN.match(sid):
+                raise ValueError(f"Invalid subject_id format: {sid}")
+            if sid in seen:
+                continue
+            seen.add(sid)
+            out.append(sid)
+        return out
+
+    @field_validator("start_date", "end_date")
+    @classmethod
+    def validate_date(cls, v: str) -> str:
+        s = (v or "").strip()
+        if not _DATE_RE.match(s):
+            raise ValueError("Dates must be YYYY-MM-DD")
+        # Basic calendar sanity
+        try:
+            y, m, d = (int(x) for x in s.split("-"))
+            if not (1 <= m <= 12 and 1 <= d <= 31):
+                raise ValueError("invalid")
+        except ValueError as exc:
+            raise ValueError("Dates must be YYYY-MM-DD") from exc
+        return s
+
+    @model_validator(mode="after")
+    def end_after_start(self) -> "MasteryCreate":
+        if self.end_date < self.start_date:
+            raise ValueError("end_date must be on or after start_date")
+        return self
+
+
 class TaskUpdate(BaseModel):
     model_config = ConfigDict(str_strip_whitespace=True, extra="forbid")
 
