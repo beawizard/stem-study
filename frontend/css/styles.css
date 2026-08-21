@@ -477,6 +477,11 @@ button { cursor: pointer; min-height: var(--tap); }
   width: 2.25rem;
   text-align: center;
 }
+.mastery-grade-cell {
+  white-space: nowrap;
+  font-weight: 700;
+  color: var(--brand-dark);
+}
 .mastery-dates {
   gap: 0.75rem;
 }

@@ -43,6 +43,7 @@ const App = (() => {
       name: "",
       category: "",
       topics: [],
+      subject_ids: [],
       start_date: "",
       end_date: "",
       shared: false,
@@ -3505,6 +3506,7 @@ const App = (() => {
       name: "",
       category: "",
       topics: [],
+      subject_ids: [],
       start_date: iso(today),
       end_date: iso(end),
       shared: false,
@@ -3518,6 +3520,7 @@ const App = (() => {
       name: c.name || "",
       category: c.category || "",
       topics: Array.isArray(c.topics) ? [...c.topics] : [],
+      subject_ids: Array.isArray(c.subject_ids) ? [...c.subject_ids] : [],
       start_date: c.start_date || "",
       end_date: c.end_date || "",
       shared: !!c.shared,
@@ -3526,21 +3529,22 @@ const App = (() => {
     state.masteryCreateStep = 1;
   }
 
-  function masteryTopicGroups(allSubjects, category) {
-    const groups = new Map();
+  function masterySetsInCategory(allSubjects, category) {
+    const rows = [];
     for (const s of allSubjects || []) {
       if ((s.category || "Mathematics") !== category) continue;
-      const base = baseTopicName(s.topic || s.name || "") || s.subject_id;
-      if (!groups.has(base)) {
-        groups.set(base, { topic: base, subject_ids: [], count: 0 });
-      }
-      const g = groups.get(base);
-      g.subject_ids.push(s.subject_id);
-      g.count += 1;
+      rows.push({
+        subject_id: s.subject_id,
+        topic: s.topic || s.name || s.subject_id,
+        grade_level: (s.grade_level || "").trim(),
+        sort_order: Number(s.sort_order) || 0,
+      });
     }
-    return [...groups.values()].sort((a, b) =>
-      a.topic.localeCompare(b.topic)
-    );
+    rows.sort((a, b) => {
+      if (a.sort_order !== b.sort_order) return a.sort_order - b.sort_order;
+      return String(a.topic).localeCompare(String(b.topic));
+    });
+    return rows;
   }
 
   async function viewMastery() {
@@ -3693,41 +3697,48 @@ const App = (() => {
         <select id="mastery-category">${opts}</select>
         <p class="muted">Topics in the next step come from this category.</p>`;
     } else if (step === 3) {
-      const groups = masteryTopicGroups(allSubjects, draft.category);
-      const selected = new Set(
+      const sets = masterySetsInCategory(allSubjects, draft.category);
+      const selectedIds = new Set(
+        (draft.subject_ids || []).map((id) => String(id))
+      );
+      const selectedTopics = new Set(
         (draft.topics || []).map((t) => String(t).toLowerCase())
       );
-      const rows = groups.length
-        ? groups
+      const rows = sets.length
+        ? sets
             .map((g) => {
-              const checked = selected.has(String(g.topic).toLowerCase())
-                ? "checked"
-                : "";
+              const checked =
+                selectedIds.has(g.subject_id) ||
+                selectedTopics.has(String(g.topic).toLowerCase())
+                  ? "checked"
+                  : "";
+              const grade = g.grade_level || "—";
               return `<tr>
                 <td class="mastery-check-cell">
-                  <input type="checkbox" class="mastery-topic-cb" data-topic="${escapeAttr(
-                    g.topic
-                  )}" ${checked} />
+                  <input type="checkbox" class="mastery-topic-cb"
+                    data-topic="${escapeAttr(g.topic)}"
+                    data-subject-id="${escapeAttr(g.subject_id)}"
+                    ${checked} />
                 </td>
                 <td>${escapeHtml(g.topic)}</td>
-                <td class="muted">${g.count} set(s)</td>
+                <td class="mastery-grade-cell">${escapeHtml(grade)}</td>
               </tr>`;
             })
             .join("")
-        : `<tr><td colspan="3" class="muted">No topics in this category.</td></tr>`;
+        : `<tr><td colspan="3" class="muted">No sets in this category.</td></tr>`;
       body = `
-        <p class="muted">Select <strong>at least 2 topics</strong> for <strong>${escapeHtml(
+        <p class="muted">Select <strong>at least 2 sets</strong> for <strong>${escapeHtml(
           draft.category || "—"
         )}</strong>.</p>
         <div class="table-wrap mastery-topics-wrap">
-          <table class="mastery-topics-table" aria-label="Select topics">
+          <table class="mastery-topics-table" aria-label="Select sets">
             <thead>
               <tr>
                 <th scope="col" class="mastery-check-cell">
-                  <input type="checkbox" id="mastery-topic-all" title="Select all" aria-label="Select all topics" />
+                  <input type="checkbox" id="mastery-topic-all" title="Select all" aria-label="Select all sets" />
                 </th>
                 <th scope="col">Topic</th>
-                <th scope="col">Sets</th>
+                <th scope="col">Grade Level</th>
               </tr>
             </thead>
             <tbody>${rows}</tbody>
@@ -3762,7 +3773,7 @@ const App = (() => {
         <p class="muted">Publishing makes this collection appear at the top of the Mastery page.</p>
         <div class="mastery-review muted">
           <div><strong>${escapeHtml(draft.name || "Untitled")}</strong></div>
-          <div>${escapeHtml(draft.category || "—")} · ${(draft.topics || []).length} topic(s)</div>
+          <div>${escapeHtml(draft.category || "—")} · ${(draft.subject_ids || draft.topics || []).length} set(s)</div>
           <div>${escapeHtml((draft.topics || []).join(", ") || "—")}</div>
         </div>`;
     }
@@ -3959,19 +3970,24 @@ const App = (() => {
       // Changing category clears prior topic picks (keep picks when editing same category)
       if (nextCat !== draft.category) {
         draft.topics = [];
+        draft.subject_ids = [];
       }
       draft.category = nextCat;
     } else if (step === 3) {
       const picked = [];
+      const pickedIds = [];
       main()
         .querySelectorAll(".mastery-topic-cb:checked")
         .forEach((cb) => {
           const t = cb.getAttribute("data-topic");
+          const sid = cb.getAttribute("data-subject-id");
           if (t) picked.push(t);
+          if (sid) pickedIds.push(sid);
         });
       draft.topics = picked;
+      draft.subject_ids = pickedIds;
       if (picked.length < 2) {
-        toast("Select at least 2 topics", true);
+        toast("Select at least 2 sets", true);
         return false;
       }
     } else if (step === 4) {
@@ -4119,6 +4135,7 @@ const App = (() => {
           name: draft.name,
           category: draft.category,
           topics: draft.topics,
+          subject_ids: draft.subject_ids || [],
           start_date: draft.start_date,
           end_date: draft.end_date,
           shared: !!draft.shared,
