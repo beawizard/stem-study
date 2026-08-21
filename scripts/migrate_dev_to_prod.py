@@ -68,8 +68,16 @@ def scan_all(table_name: str, region: str) -> list[dict[str, Any]]:
     return items
 
 
-def should_migrate_item(item: dict[str, Any], *, content_only: bool) -> bool:
+def should_migrate_item(
+    item: dict[str, Any],
+    *,
+    content_only: bool = False,
+    subjects_only: bool = False,
+) -> bool:
     pk = str(item.get("PK") or "")
+    if subjects_only:
+        # Category / topic / level / question catalog only (no learners, no schools)
+        return pk.startswith("SUBJECT#")
     if content_only:
         return pk.startswith("SUBJECT#") or pk.startswith("SCHOOL#")
     # Full app state for learners + content
@@ -316,13 +324,26 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--source-table", default="stem-study-dev")
     parser.add_argument("--dest-table", default="stem-study-prod")
-    parser.add_argument("--source-pool", required=True)
-    parser.add_argument("--dest-pool", required=True)
+    parser.add_argument(
+        "--source-pool",
+        default="",
+        help="Required unless --skip-cognito",
+    )
+    parser.add_argument(
+        "--dest-pool",
+        default="",
+        help="Required unless --skip-cognito",
+    )
     parser.add_argument("--region", default="ap-southeast-1")
     parser.add_argument(
         "--content-only",
         action="store_true",
         help="Only SUBJECT# and SCHOOL# (skip USER# progress)",
+    )
+    parser.add_argument(
+        "--subjects-only",
+        action="store_true",
+        help="Only SUBJECT# catalog (topics/levels/questions). No schools, no learners.",
     )
     parser.add_argument(
         "--skip-dynamodb",
@@ -340,30 +361,52 @@ def main() -> int:
     parser.add_argument("--dry-run", action="store_true")
     args = parser.parse_args()
 
-    print("=== Dev → Prod migration ===")
-    print(f"DynamoDB: {args.source_table} → {args.dest_table}")
-    print(f"Cognito:  {args.source_pool} → {args.dest_pool}")
+    if not args.skip_cognito and (not args.source_pool or not args.dest_pool):
+        parser.error("--source-pool and --dest-pool are required unless --skip-cognito")
+
+    direction = f"{args.source_table} → {args.dest_table}"
+    print("=== DynamoDB / Cognito migration ===")
+    print(f"DynamoDB: {direction}")
+    if args.skip_cognito:
+        print("Cognito:  skipped")
+    else:
+        print(f"Cognito:  {args.source_pool} → {args.dest_pool}")
     print(f"Region:   {args.region}")
+    if args.subjects_only:
+        print("Filter:   SUBJECT# only (categories/topics/levels/questions)")
+    elif args.content_only:
+        print("Filter:   SUBJECT# + SCHOOL#")
 
     if not args.skip_dynamodb:
         print("\nScanning source table…")
         items = scan_all(args.source_table, args.region)
         selected = [
-            i for i in items if should_migrate_item(i, content_only=args.content_only)
+            i
+            for i in items
+            if should_migrate_item(
+                i,
+                content_only=args.content_only,
+                subjects_only=args.subjects_only,
+            )
         ]
         # Stats
         prefixes: dict[str, int] = {}
+        entity_types: dict[str, int] = {}
         for i in selected:
             p = str(i.get("PK") or "").split("#")[0]
             prefixes[p] = prefixes.get(p, 0) + 1
+            et = str(i.get("entity_type") or "unknown")
+            entity_types[et] = entity_types.get(et, 0) + 1
         print(f"Selected {len(selected)} / {len(items)} items:")
         for k, v in sorted(prefixes.items(), key=lambda x: -x[1]):
-            print(f"  {k}: {v}")
+            print(f"  PK {k}: {v}")
+        for k, v in sorted(entity_types.items(), key=lambda x: -x[1]):
+            print(f"  entity_type {k}: {v}")
 
         if args.dry_run:
             print("[dry-run] skip DynamoDB write")
         else:
-            print("Writing to destination table…")
+            print("Writing to destination table (overwrite matching PK/SK)…")
             n = batch_write(args.dest_table, args.region, selected)
             print(f"Wrote {n} items to {args.dest_table}")
 
