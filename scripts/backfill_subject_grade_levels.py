@@ -1,17 +1,18 @@
 #!/usr/bin/env python3
-"""Backfill SUBJECT grade_level from Operation + App Level (GradeLevelAttribute table).
+"""Backfill SUBJECT grade_level from Operation + App Level.
 
-Canonical mapping
------------------
+Source of truth: resources/GradeLevelAttribute2.png
+
 Addition & Subtraction:
-  Level 1, Level 2 → Kindergarten
-  Level 3          → Grade 1
-  Level 4          → Grade 2
-  Level 5          → Grade 3
-  Level 6          → Grade 4
+  Level 1 → Kindergarten
+  Level 2 → Grade 1
+  Level 3 → Grade 2
+  Level 4 → Grade 3
+  Level 5 → Grade 4
+  Level 6 → Grade 5
 
 Multiplication:
-  Level 1          → Grade 1
+  Level 1 → Grade 1
 
 Usage:
   source .venv/bin/activate
@@ -31,14 +32,14 @@ from boto3.dynamodb.conditions import Key
 
 _LEVEL_RE = re.compile(r"Level\s*(\d+)\s*$", re.IGNORECASE)
 
-# Operation family → App Level → Grade Level (from GradeLevelAttribute.png)
+# From GradeLevelAttribute2.png
 ADD_SUB_LEVEL_TO_GRADE = {
     1: "Kindergarten",
-    2: "Kindergarten",
-    3: "Grade 1",
-    4: "Grade 2",
-    5: "Grade 3",
-    6: "Grade 4",
+    2: "Grade 1",
+    3: "Grade 2",
+    4: "Grade 3",
+    5: "Grade 4",
+    6: "Grade 5",
 }
 
 MULT_LEVEL_TO_GRADE = {
