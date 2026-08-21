@@ -3592,9 +3592,10 @@ const App = (() => {
                 : win === "ended"
                   ? `<span class="badge err">Ended</span>`
                   : `<span class="badge ok">Active</span>`;
-            const shared = c.shared
-              ? `<span class="badge subject-tag">Shared</span>`
-              : "";
+            const isShared = c.shared === true || c.shared === "true" || c.shared === 1;
+            const visBadge = isShared
+              ? `<span class="mastery-vis-badge is-shared">Shared</span>`
+              : `<span class="mastery-vis-badge is-private">Private</span>`;
             const canManage = Boolean(c.can_manage || c.is_owner || isAdmin);
             const actions = canManage
               ? `<span class="mastery-chip-actions">
@@ -3611,8 +3612,9 @@ const App = (() => {
                 win === "ended" ? "secondary" : ""
               }" data-mastery-open="${escapeAttr(c.mastery_id)}">
                 <span class="mastery-chip-name">${escapeHtml(c.name || "Untitled")}</span>
-                ${shared}${badge}
               </button>
+              ${visBadge}
+              ${badge}
               ${actions}
             </div>`;
           })
@@ -3761,21 +3763,22 @@ const App = (() => {
           </div>
         </div>
         ${
-          isAdmin
+          isAdmin || editing
             ? `<label class="mastery-shared-label">
                 <input type="checkbox" id="mastery-shared" ${
-                  editing ? (draft.shared ? "checked" : "") : "checked"
+                  (editing ? !!draft.shared : true) ? "checked" : ""
                 } />
                 Make visible to all learners
               </label>
-              <p class="muted">${
+              <p class="mastery-shared-note ${
+                editing && !draft.shared ? "is-private" : "is-shared"
+              }" id="mastery-shared-hint">${
                 editing && !draft.shared
                   ? "This collection is currently private. Check the box and save to show it on every learner’s Mastery page."
                   : "Checked: all learners see this collection on their Mastery page."
               }</p>`
-            : ""
+            : `<p class="muted">Publishing makes this collection appear at the top of your Mastery page (only you can see it).</p>`
         }
-        <p class="muted">Publishing makes this collection appear at the top of the Mastery page.</p>
         <div class="mastery-review muted">
           <div><strong>${escapeHtml(draft.name || "Untitled")}</strong></div>
           <div>${escapeHtml(draft.category || "—")} · ${(draft.subject_ids || draft.topics || []).length} set(s)</div>
@@ -4173,6 +4176,26 @@ const App = (() => {
           next.textContent = editing ? "Save changes" : "Publish";
         }
       };
+    }
+
+    const sharedCb = document.getElementById("mastery-shared");
+    const sharedHint = document.getElementById("mastery-shared-hint");
+    if (sharedCb && sharedHint) {
+      const syncShareHint = () => {
+        if (sharedCb.checked) {
+          sharedHint.classList.remove("is-private");
+          sharedHint.classList.add("is-shared");
+          sharedHint.textContent =
+            "Checked: all learners see this collection on their Mastery page.";
+        } else {
+          sharedHint.classList.remove("is-shared");
+          sharedHint.classList.add("is-private");
+          sharedHint.textContent =
+            "This collection is currently private. Check the box and save to show it on every learner’s Mastery page.";
+        }
+      };
+      sharedCb.onchange = syncShareHint;
+      syncShareHint();
     }
 
     const selectAll = document.getElementById("mastery-topic-all");

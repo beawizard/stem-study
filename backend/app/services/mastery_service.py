@@ -362,7 +362,7 @@ def _public(
         "start_date": start or None,
         "end_date": end or None,
         "status": item.get("status") or "published",
-        "shared": bool(item.get("shared")),
+        "shared": item.get("shared") in (True, "true", "True", 1, "1"),
         "window_status": window_status(start, end),
         "is_owner": is_owner,
         "can_manage": bool(is_owner or is_admin),
