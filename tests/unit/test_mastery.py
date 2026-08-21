@@ -65,14 +65,14 @@ def test_shared_mastery_visible_to_all(dynamodb_table):
     assert personal["shared"] is False
     assert mastery_service.list_mastery_for_user("other") == []
 
-    # Admin create is always shared, even without shared=True
+    # Admin create with shared=True is visible to everyone
     admin_data = MasteryCreate(
         name="School Pack Auto",
         category="Mathematics",
         topics=["Arithmetic (Addition)", "Fractions"],
         start_date="2026-01-01",
         end_date="2026-12-31",
-        shared=False,
+        shared=True,
     )
     shared = mastery_service.create_mastery("admin-1", admin_data, is_admin=True)
     assert shared["shared"] is True
