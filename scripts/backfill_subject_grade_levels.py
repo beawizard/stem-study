@@ -1,19 +1,22 @@
 #!/usr/bin/env python3
-"""Backfill SUBJECT grade_level from topic name (Level N → Kindergarten / Grade N-1).
+"""Backfill SUBJECT grade_level from Operation + App Level (GradeLevelAttribute table).
 
-Mapping (from GradeLevelAttribute table):
-  … Level 1 → Kindergarten
-  … Level 2 → Grade 1
-  … Level 3 → Grade 2
-  … Level 4 → Grade 3
-  … Level 5 → Grade 4
-  … Level 6 → Grade 5
+Canonical mapping
+-----------------
+Addition & Subtraction:
+  Level 1, Level 2 → Kindergarten
+  Level 3          → Grade 1
+  Level 4          → Grade 2
+  Level 5          → Grade 3
+  Level 6          → Grade 4
+
+Multiplication:
+  Level 1          → Grade 1
 
 Usage:
   source .venv/bin/activate
-  python scripts/backfill_subject_grade_levels.py --table stem-study-dev
-  python scripts/backfill_subject_grade_levels.py --table stem-study-prod
-  python scripts/backfill_subject_grade_levels.py --table stem-study-dev --dry-run
+  python scripts/backfill_subject_grade_levels.py --table stem-study-dev --force
+  python scripts/backfill_subject_grade_levels.py --table stem-study-prod --force
 """
 
 from __future__ import annotations
@@ -22,36 +25,51 @@ import argparse
 import re
 import sys
 from datetime import datetime, timezone
-from typing import Any
 
 import boto3
 from boto3.dynamodb.conditions import Key
 
-LEVEL_TO_GRADE = {
+_LEVEL_RE = re.compile(r"Level\s*(\d+)\s*$", re.IGNORECASE)
+
+# Operation family → App Level → Grade Level (from GradeLevelAttribute.png)
+ADD_SUB_LEVEL_TO_GRADE = {
     1: "Kindergarten",
-    2: "Grade 1",
-    3: "Grade 2",
-    4: "Grade 3",
-    5: "Grade 4",
-    6: "Grade 5",
-    7: "Grade 6",
-    8: "Grade 7",
-    9: "Grade 8",
-    10: "Grade 9",
-    11: "Grade 10",
-    12: "Grade 11",
-    13: "Grade 12",
+    2: "Kindergarten",
+    3: "Grade 1",
+    4: "Grade 2",
+    5: "Grade 3",
+    6: "Grade 4",
 }
 
-_LEVEL_RE = re.compile(r"Level\s*(\d+)\s*$", re.IGNORECASE)
+MULT_LEVEL_TO_GRADE = {
+    1: "Grade 1",
+}
+
+
+def _operation_family(topic: str) -> str | None:
+    t = (topic or "").lower()
+    if "multiplication" in t or "multiply" in t:
+        return "multiplication"
+    if "addition" in t or "add" in t:
+        return "addition"
+    if "subtraction" in t or "subtract" in t:
+        return "subtraction"
+    return None
 
 
 def infer_grade_level(topic: str) -> str | None:
-    m = _LEVEL_RE.search((topic or "").strip())
+    """Map topic title to grade_level using Operation + App Level columns."""
+    topic = (topic or "").strip()
+    m = _LEVEL_RE.search(topic)
     if not m:
         return None
-    n = int(m.group(1))
-    return LEVEL_TO_GRADE.get(n)
+    app_level = int(m.group(1))
+    family = _operation_family(topic)
+    if family in ("addition", "subtraction"):
+        return ADD_SUB_LEVEL_TO_GRADE.get(app_level)
+    if family == "multiplication":
+        return MULT_LEVEL_TO_GRADE.get(app_level)
+    return None
 
 
 def main() -> int:
@@ -85,7 +103,7 @@ def main() -> int:
     skipped = 0
     unknown = 0
 
-    print(f"Table={args.table} subjects={len(items)} dry_run={args.dry_run}")
+    print(f"Table={args.table} subjects={len(items)} dry_run={args.dry_run} force={args.force}")
     for item in items:
         if item.get("deleted_at"):
             continue
@@ -95,16 +113,19 @@ def main() -> int:
         inferred = infer_grade_level(topic)
         if not inferred:
             unknown += 1
-            print(f"  ? no Level N in topic: {topic!r} ({sid})")
+            print(f"  ? no mapping for topic: {topic!r} ({sid})")
             continue
-        if existing and not args.force:
-            if existing == inferred:
-                skipped += 1
-                continue
-            print(f"  ~ keep existing {existing!r} (inferred {inferred!r}): {topic}")
+        if existing == inferred and not args.force:
             skipped += 1
             continue
-        print(f"  → {inferred}: {topic} ({sid})")
+        if existing and existing != inferred and not args.force:
+            print(f"  ~ keep existing {existing!r} (table says {inferred!r}): {topic}")
+            skipped += 1
+            continue
+        if existing and existing != inferred:
+            print(f"  ✎ {existing!r} → {inferred!r}: {topic} ({sid})")
+        else:
+            print(f"  → {inferred}: {topic} ({sid})")
         if not args.dry_run:
             table.update_item(
                 Key={"PK": item["PK"], "SK": item["SK"]},
