@@ -1533,6 +1533,7 @@ body.admin-mode .table-wrap {
   flex: 1 1 auto;
   display: flex;
   flex-direction: column;
+  gap: 0.5rem;
   min-height: 0;
 }
 .tech-reader audio {
@@ -1543,8 +1544,9 @@ body.admin-mode .table-wrap {
   flex-wrap: wrap;
   align-items: center;
   gap: 0.45rem 0.75rem;
-  margin-bottom: 0.45rem;
   flex: 0 0 auto;
+  position: relative;
+  z-index: 1;
 }
 .tech-book {
   display: flex;
@@ -1552,12 +1554,20 @@ body.admin-mode .table-wrap {
   gap: 0.35rem;
   user-select: none;
   touch-action: pan-y;
-  flex: 0 1 auto;
+  flex: 1.25 1 0;
   min-height: 0;
+  overflow: hidden;
+  position: relative;
+  z-index: 0;
 }
 .tech-page-stage {
   flex: 1 1 auto;
+  align-self: stretch;
   min-width: 0;
+  min-height: 0;
+  height: 100%;
+  display: flex;
+  align-items: center;
   perspective: 900px;
 }
 .tech-page {
@@ -1567,12 +1577,19 @@ body.admin-mode .table-wrap {
   border: 3px solid #99f6e4;
   box-shadow: 0 10px 24px rgba(15, 118, 110, 0.16);
   transform-origin: center left;
+  height: 100%;
+  max-height: 100%;
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
 }
 .tech-page img {
   display: block;
   width: 100%;
   height: auto;
-  max-height: min(48dvh, calc(var(--app-height, 100dvh) - 21rem));
+  max-width: 100%;
+  max-height: 100%;
   object-fit: contain;
   background: #ecfeff;
 }
@@ -1618,14 +1635,14 @@ body.admin-mode .table-wrap {
   background: #94a3b8;
 }
 .tech-subtitle {
-  margin-top: 0.55rem;
+  margin-top: 0;
   padding: 0.7rem 0.8rem;
   border-radius: 12px;
   background: rgba(15, 23, 42, 0.88);
   color: #f8fafc;
   font-size: 0.92rem;
   line-height: 1.35;
-  flex: 1 1 auto;
+  flex: 1 1 0;
   min-height: 6.2rem;
   max-height: none;
   overflow-y: auto;
@@ -1634,6 +1651,8 @@ body.admin-mode .table-wrap {
   touch-action: pan-y;
   word-wrap: break-word;
   scrollbar-width: thin;
+  position: relative;
+  z-index: 1;
 }
 .tech-subtitle::-webkit-scrollbar {
   width: 6px;
@@ -1687,9 +1706,6 @@ body.tech-mode .topbar {
   flex: 0 0 auto;
 }
 @media (max-height: 640px) {
-  .tech-page img {
-    max-height: min(36dvh, calc(var(--app-height, 100dvh) - 17rem));
-  }
   .tech-subtitle {
     min-height: 4.6rem;
   }
