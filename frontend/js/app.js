@@ -275,6 +275,30 @@ const App = (() => {
     if (mainEl) mainEl.classList.toggle("study-mode-main", Boolean(active));
   }
 
+  function setTechModeUi(active) {
+    document.body.classList.toggle("tech-mode", Boolean(active));
+    const mainEl = main();
+    if (mainEl) mainEl.classList.toggle("tech-mode-main", Boolean(active));
+  }
+
+  /** Visible viewport height so Technology can fill the device screen. */
+  function bindAppViewport() {
+    if (state._appViewportBound) return;
+    const root = document.documentElement;
+    const apply = () => {
+      const vv = window.visualViewport;
+      const h = vv ? Math.round(vv.height) : window.innerHeight;
+      root.style.setProperty("--app-height", `${Math.max(0, h)}px`);
+    };
+    if (window.visualViewport) {
+      window.visualViewport.addEventListener("resize", apply);
+      window.visualViewport.addEventListener("scroll", apply);
+    }
+    window.addEventListener("resize", apply);
+    apply();
+    state._appViewportBound = true;
+  }
+
   function setAdminModeUi(active) {
     document.body.classList.toggle("admin-mode", Boolean(active));
     const mainEl = main();
@@ -1561,7 +1585,7 @@ const App = (() => {
       readerHtml = `<p class="muted study-topic-desc">Select a Technology topic. Presentations appear as a picture book with audio and subtitles.</p>`;
     }
     return `
-      <div class="card study-landing-card">
+      <div class="card study-landing-card tech-landing-card">
         <button type="button" class="btn secondary btn-sm" data-study-hub>← Study</button>
         <h1 class="study-page-title" style="margin-top:0.5rem">Technology</h1>
         <div class="study-pickers study-pickers-stacked" style="max-width:22rem;margin-top:0.75rem">
@@ -4894,6 +4918,7 @@ const App = (() => {
     if (!Auth.isLoggedIn()) {
       setNavVisible(false);
       setAdminModeUi(false);
+      setTechModeUi(false);
       el.innerHTML = viewAuth();
       bindAuth();
       return;
@@ -4931,6 +4956,7 @@ const App = (() => {
         break;
     }
     el.innerHTML = html;
+    setTechModeUi(state.route === "study" && state.studyView === "tech");
     updateNavProfileAvatar();
     if (state.route === "admin") {
       bindAdmin();
@@ -7297,6 +7323,7 @@ const App = (() => {
   }
 
   function init() {
+    bindAppViewport();
     nav().querySelectorAll("button[data-route]").forEach((b) => {
       b.onclick = () => navigate(b.dataset.route);
     });
