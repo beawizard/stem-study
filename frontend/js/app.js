@@ -1566,10 +1566,6 @@ const App = (() => {
         <h1 class="study-page-title" style="margin-top:0.5rem">Technology</h1>
         <div class="study-pickers study-pickers-stacked" style="max-width:22rem;margin-top:0.75rem">
           <div class="study-picker-field">
-            <label for="study-category">Category</label>
-            <select id="study-category">${categoryOptions}</select>
-          </div>
-          <div class="study-picker-field">
             <label for="study-topic">Topic</label>
             <select id="study-topic" ${topics.length ? "" : "disabled"}>${topicOptions}</select>
           </div>
@@ -1884,10 +1880,6 @@ const App = (() => {
                 }
               </div>
               <div class="study-pickers study-pickers-stacked">
-                <div class="study-picker-field">
-                  <label for="study-category">Category</label>
-                  <select id="study-category">${categoryOptions}</select>
-                </div>
                 <div class="study-picker-field">
                   <label for="study-topic">Topic</label>
                   <select id="study-topic" ${topicsInCategory.length ? "" : "disabled"}>${topicOptions}</select>
@@ -6762,16 +6754,8 @@ const App = (() => {
       };
     });
 
-    // Study page: Category + Topic combos (same model as Admin subjects)
-    const studyCat = document.getElementById("study-category");
+    // Study page: Topic combo (STEM area already chosen on the tile hub)
     const studyTopic = document.getElementById("study-topic");
-    if (studyCat) {
-      studyCat.onchange = () => {
-        state.studyCategory = studyCat.value || null;
-        state.studySubjectId = null; // pick first topic in new category
-        render();
-      };
-    }
     if (studyTopic) {
       studyTopic.onchange = () => {
         state.studySubjectId = studyTopic.value || null;
