@@ -358,6 +358,37 @@ class SubjectUpdate(BaseModel):
         return normalize_content_grade(v)
 
 
+class TechnologyPageSpec(BaseModel):
+    """One presentation page (image + optional audio/text) for folder import."""
+
+    model_config = ConfigDict(str_strip_whitespace=True, extra="forbid")
+
+    index: int = Field(..., ge=0, le=200)
+    title: str = Field(default="", max_length=160)
+    text: str = Field(default="", max_length=8000)
+    image_ext: str = Field(default="jpg", max_length=8)
+    audio_ext: str = Field(default="", max_length=8)
+    image_content_type: str = Field(default="image/jpeg", max_length=80)
+    audio_content_type: str = Field(default="", max_length=80)
+
+
+class TechnologyTopicCreate(BaseModel):
+    """POST /technology/topics — admin creates a Technology presentation topic."""
+
+    model_config = ConfigDict(str_strip_whitespace=True, extra="forbid")
+
+    topic: str = Field(..., min_length=1, max_length=100)
+    grade_level: str | None = Field(default=None, max_length=32)
+    description: str = Field(default="", max_length=MAX_DESC_LEN)
+    pages: list[TechnologyPageSpec] = Field(..., min_length=1, max_length=80)
+    replace: bool = False
+
+    @field_validator("grade_level")
+    @classmethod
+    def validate_grade_level(cls, v: str | None) -> str | None:
+        return normalize_content_grade(v)
+
+
 class LevelCreate(BaseModel):
     model_config = ConfigDict(str_strip_whitespace=True, extra="forbid")
 

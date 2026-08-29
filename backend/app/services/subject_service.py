@@ -717,6 +717,9 @@ def _public_subject(item: dict[str, Any]) -> dict[str, Any]:
         "description": item.get("description", ""),
         "sort_order": item.get("sort_order", 0),
         "grade_level": grade,
+        "content_kind": item.get("content_kind") or "",
+        "presentation_ready": bool(item.get("presentation_ready")),
+        "page_count": int(item.get("page_count") or 0),
         "created_at": item.get("created_at"),
     }
 

@@ -38,6 +38,10 @@ Routes (all require Cognito JWT unless noted):
   GET               /admin/payments              (admin)
   POST              /admin/payments/{user_id}/{payment_id}/verify  (admin)
   POST              /admin/seed                  (admin)
+  POST              /technology/topics           (admin — start folder import, presigned S3)
+  POST              /technology/topics/{id}/complete  (admin)
+  GET               /technology/topics
+  GET               /technology/topics/{id}      (presentation pages + media URLs)
 """
 
 from __future__ import annotations
@@ -68,8 +72,10 @@ from app.services import (
     study_service,
     subject_service,
     task_service,
+    technology_service,
     user_service,
 )
+from app.services.technology_service import TechnologyError
 from app.services.mastery_service import MasteryForbidden, MasteryNotFound
 from app.services.payment_service import PaymentError, PaymentNotFound
 from app.services.school_service import SchoolConflict, SchoolNotFound
@@ -103,6 +109,7 @@ from app.validation import (
     SubjectUpdate,
     TaskCreate,
     TaskUpdate,
+    TechnologyTopicCreate,
     parse_body,
 )
 
@@ -112,6 +119,8 @@ logger.setLevel(logging.INFO)
 # path param patterns
 _TASK_ID = re.compile(r"^/tasks/([^/]+)$")
 _MASTERY_ID = re.compile(r"^/mastery/([^/]+)$")
+_TECH_TOPIC = re.compile(r"^/technology/topics/([^/]+)$")
+_TECH_TOPIC_COMPLETE = re.compile(r"^/technology/topics/([^/]+)/complete$")
 _SUBJECT_ID = re.compile(r"^/subjects/([^/]+)$")
 _SUBJECT_LEVELS = re.compile(r"^/subjects/([^/]+)/levels$")
 _SUBJECT_LEVEL = re.compile(r"^/subjects/([^/]+)/levels/([^/]+)$")
@@ -711,6 +720,45 @@ def _route(
     if method == "POST" and path == "/admin/seed":
         require_admin(user)
         return ok(subject_service.seed_math_defaults())
+
+    # --- Technology presentation topics ---
+    if method == "GET" and path == "/technology/topics":
+        return ok({"topics": technology_service.list_technology_topics()})
+
+    if method == "POST" and path == "/technology/topics":
+        require_admin(user)
+        data = parse_body(TechnologyTopicCreate, body)
+        try:
+            return created(
+                technology_service.start_topic_upload(
+                    data, admin_user_id=user.user_id
+                )
+            )
+        except ConflictError as exc:
+            return bad_request(str(exc))
+        except TechnologyError as exc:
+            return bad_request(str(exc))
+        except ValueError as exc:
+            return bad_request(str(exc))
+
+    m_tech_done = _TECH_TOPIC_COMPLETE.match(path)
+    if m_tech_done and method == "POST":
+        require_admin(user)
+        sid = unquote(m_tech_done.group(1))
+        try:
+            return ok(technology_service.complete_topic_upload(sid))
+        except SubjectNotFound:
+            return not_found("Technology topic not found")
+        except TechnologyError as exc:
+            return bad_request(str(exc))
+
+    m_tech = _TECH_TOPIC.match(path)
+    if m_tech and method == "GET":
+        sid = unquote(m_tech.group(1))
+        try:
+            return ok(technology_service.get_technology_topic(sid))
+        except SubjectNotFound:
+            return not_found("Technology topic not found")
 
     return not_found(f"No route for {method} {path}")
 

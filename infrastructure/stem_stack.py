@@ -69,7 +69,7 @@ class StemStack(Stack):
         table = self._create_table(removal)
         user_pool, user_pool_client, admin_group = self._create_cognito(removal)
         frontend_bucket = self._create_frontend_bucket(removal, is_prod=is_prod)
-        fn = self._create_api_lambda(table, user_pool)
+        fn = self._create_api_lambda(table, user_pool, frontend_bucket)
         http_api = self._create_http_api(fn, user_pool, user_pool_client)
 
         s3_website_url = f"http://{frontend_bucket.bucket_website_url}"
@@ -225,6 +225,19 @@ class StemStack(Stack):
                 ignore_public_acls=False,
                 restrict_public_buckets=False,
             ),
+            cors=[
+                s3.CorsRule(
+                    allowed_methods=[
+                        s3.HttpMethods.GET,
+                        s3.HttpMethods.PUT,
+                        s3.HttpMethods.HEAD,
+                    ],
+                    allowed_origins=["*"],
+                    allowed_headers=["*"],
+                    exposed_headers=["ETag", "x-amz-request-id"],
+                    max_age=3600,
+                )
+            ],
             removal_policy=removal,
             auto_delete_objects=removal == RemovalPolicy.DESTROY and not is_prod,
             encryption=s3.BucketEncryption.S3_MANAGED,
@@ -293,9 +306,13 @@ class StemStack(Stack):
         self,
         table: dynamodb.Table,
         user_pool: cognito.UserPool,
+        frontend_bucket: s3.Bucket | None = None,
     ) -> lambda_.Function:
         package_dir = BACKEND_DIR / "lambda_package"
         asset_path = package_dir if package_dir.is_dir() else BACKEND_DIR
+        website_url = ""
+        if frontend_bucket is not None:
+            website_url = f"http://{frontend_bucket.bucket_website_url}"
         fn = lambda_.Function(
             self,
             "ApiFunction",
@@ -315,6 +332,8 @@ class StemStack(Stack):
                 "ADMIN_NOTIFY_EMAIL": self.node.try_get_context("adminNotifyEmail")
                 or "",
                 "SES_FROM_EMAIL": self.node.try_get_context("sesFromEmail") or "",
+                "FRONTEND_BUCKET": frontend_bucket.bucket_name if frontend_bucket else "",
+                "FRONTEND_PUBLIC_BASE": website_url,
             },
             description=f"STEM Study API ({self.env_name}, ARM64)",
         )
@@ -326,6 +345,9 @@ class StemStack(Stack):
                 resources=["*"],
             )
         )
+        if frontend_bucket is not None:
+            frontend_bucket.grant_put(fn, "technology/*")
+            frontend_bucket.grant_read(fn, "technology/*")
         return fn
 
     def _create_http_api(

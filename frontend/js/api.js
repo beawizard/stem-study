@@ -131,6 +131,16 @@ const Api = (() => {
         { token }
       ),
     createSubject: (token, body) => request("/subjects", { method: "POST", body, token }),
+    listTechnologyTopics: (token) => request("/technology/topics", { token }),
+    getTechnologyTopic: (token, subjectId) =>
+      request(`/technology/topics/${encodeURIComponent(subjectId)}`, { token }),
+    startTechnologyTopic: (token, body) =>
+      request("/technology/topics", { method: "POST", body, token }),
+    completeTechnologyTopic: (token, subjectId) =>
+      request(`/technology/topics/${encodeURIComponent(subjectId)}/complete`, {
+        method: "POST",
+        token,
+      }),
     updateSubject: (token, subjectId, body) =>
       request(`/subjects/${encodeURIComponent(subjectId)}`, {
         method: "PUT",

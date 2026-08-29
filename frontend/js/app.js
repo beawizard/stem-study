@@ -52,6 +52,7 @@ const App = (() => {
     masteryCollections: [],
     masteryActive: null, // selected published collection
     masterySubjectId: null, // topic (subject) within active collection
+    techPageIndex: 0,
   };
 
   /**
@@ -1544,6 +1545,21 @@ const App = (() => {
       : `<option value="">No topics yet</option>`;
 
     const selected = topics.find((s) => s.subject_id === state.studySubjectId);
+    let readerHtml = "";
+    if (selected && (selected.content_kind === "presentation" || selected.presentation_ready)) {
+      try {
+        const detail = await Api.getTechnologyTopic(tok, selected.subject_id);
+        readerHtml = technologyReaderHtml(detail);
+      } catch (err) {
+        readerHtml = `<p class="muted">${escapeHtml(err.message || "Could not load presentation.")}</p>`;
+      }
+    } else if (selected) {
+      readerHtml = `<p class="muted study-topic-desc">${escapeHtml(
+        selected.description || selected.topic || ""
+      )}</p>`;
+    } else {
+      readerHtml = `<p class="muted study-topic-desc">Select a Technology topic. Presentations appear as a picture book with audio and subtitles.</p>`;
+    }
     return `
       <div class="card study-landing-card">
         <button type="button" class="btn secondary btn-sm" data-study-hub>← Study</button>
@@ -1558,13 +1574,67 @@ const App = (() => {
             <select id="study-topic" ${topics.length ? "" : "disabled"}>${topicOptions}</select>
           </div>
         </div>
+        ${readerHtml}
+      </div>`;
+  }
+
+  function technologyReaderHtml(detail) {
+    const pages = (detail && detail.pages) || [];
+    if (!pages.length) {
+      return `<p class="muted">This topic has no pages yet.</p>`;
+    }
+    if (
+      state.studySubjectId !== detail.subject_id ||
+      state.techPageIndex == null ||
+      state.techPageIndex < 0 ||
+      state.techPageIndex >= pages.length
+    ) {
+      state.techPageIndex = 0;
+    }
+    const i = state.techPageIndex;
+    const page = pages[i] || pages[0];
+    const subtitle = String(page.text || "")
+      .split("\n")
+      .map((ln) => ln.trim())
+      .filter(Boolean)
+      .slice(0, 6)
+      .join(" ");
+    const grade = detail.grade_level
+      ? `<span class="study-grade-badge">${escapeHtml(detail.grade_level)}</span>`
+      : "";
+    return `
+      <div class="tech-reader" id="tech-reader" data-page-count="${pages.length}">
+        <div class="tech-reader-meta">
+          <strong>${escapeHtml(detail.topic || detail.name || "Topic")}</strong>
+          ${grade}
+          <span class="muted">Page ${i + 1} / ${pages.length}</span>
+        </div>
+        <div class="tech-book" id="tech-book">
+          <button type="button" class="tech-nav tech-nav-prev" id="tech-prev" aria-label="Previous page" ${
+            i <= 0 ? "disabled" : ""
+          }>‹</button>
+          <div class="tech-page-stage">
+            <div class="tech-page" id="tech-page">
+              ${
+                page.image_url
+                  ? `<img src="${escapeAttr(page.image_url)}" alt="${escapeAttr(
+                      page.title || "Slide"
+                    )}" draggable="false" />`
+                  : `<div class="tech-page-empty">No picture for this page.</div>`
+              }
+            </div>
+          </div>
+          <button type="button" class="tech-nav tech-nav-next" id="tech-next" aria-label="Next page" ${
+            i >= pages.length - 1 ? "disabled" : ""
+          }>›</button>
+        </div>
+        <div class="tech-subtitle" id="tech-subtitle">${escapeHtml(subtitle || page.title || "")}</div>
         ${
-          selected
-            ? `<p class="muted study-topic-desc">${escapeHtml(
-                selected.description || selected.topic || ""
-              )}</p>`
-            : `<p class="muted study-topic-desc">Select a Technology topic. Question sets for this area will appear here as they are published.</p>`
+          page.audio_url
+            ? `<audio id="tech-audio" src="${escapeAttr(page.audio_url)}" autoplay></audio>`
+            : ""
         }
+        <p class="muted tech-swipe-hint">Swipe the page — or tap the arrows — to go back and forth.</p>
       </div>`;
   }
 
@@ -2907,6 +2977,51 @@ const App = (() => {
         <div class="row" style="margin-top:0.75rem">
           <button type="button" class="btn secondary" id="admin-seed">Seed Math defaults</button>
         </div>
+      </div>
+
+      <div class="card">
+        <h2>Technology topics</h2>
+        <p class="muted">Import a topic folder (presentation + <code>images/</code>, <code>audio/</code>, <code>texts/</code>). Learners read it like a picture book with audio and subtitles.</p>
+        <form id="admin-tech-form" class="stack">
+          <div class="row">
+            <div class="grow">
+              <label for="tech-topic-select">Topic</label>
+              <select id="tech-topic-select">
+                <option value="">＋ New topic…</option>
+                ${
+                  (subjects || [])
+                    .filter((s) => (s.category || "") === "Technology")
+                    .map(
+                      (s) =>
+                        `<option value="${escapeAttr(s.topic || s.name || "")}">${escapeHtml(
+                          s.topic || s.name || s.subject_id
+                        )}${s.presentation_ready ? " ✓" : ""}</option>`
+                    )
+                    .join("")
+                }
+              </select>
+            </div>
+            <div class="grow">
+              <label for="tech-topic-name">Topic name</label>
+              <input id="tech-topic-name" maxlength="100" placeholder="e.g. AI Adventure for Kids" required />
+            </div>
+          </div>
+          <div>
+            <label for="tech-grade-level">Grade level</label>
+            <select id="tech-grade-level">${gradeSelectOptionsHtml("Grade 3")}</select>
+          </div>
+          <div>
+            <label for="tech-folder">Folder import</label>
+            <input id="tech-folder" type="file" webkitdirectory directory multiple />
+            <p class="muted" style="margin:0.35rem 0 0">Select the topic folder (example: <code>AI_Adventure_for_Kids</code>) containing the .pptx plus <code>images/</code>, <code>audio/</code>, and <code>texts/</code>.</p>
+          </div>
+          <label class="check-row">
+            <input type="checkbox" id="tech-replace" />
+            Replace this topic if it already exists
+          </label>
+          <button class="btn accent" type="submit" id="admin-tech-submit">Upload Technology topic</button>
+          <div id="tech-import-log" class="muted import-log hidden"></div>
+        </form>
       </div>
 
       <div class="card">
@@ -6090,6 +6205,112 @@ const App = (() => {
       };
     }
 
+    const techTopicSelect = document.getElementById("tech-topic-select");
+    const techTopicName = document.getElementById("tech-topic-name");
+    if (techTopicSelect && techTopicName) {
+      techTopicSelect.onchange = () => {
+        const v = techTopicSelect.value || "";
+        if (v) techTopicName.value = v;
+      };
+    }
+    const techForm = document.getElementById("admin-tech-form");
+    if (techForm) {
+      techForm.onsubmit = async (e) => {
+        e.preventDefault();
+        const topic = (document.getElementById("tech-topic-name")?.value || "").trim();
+        const grade = (document.getElementById("tech-grade-level")?.value || "").trim();
+        const folderInput = document.getElementById("tech-folder");
+        const files = folderInput && folderInput.files;
+        const replace = Boolean(document.getElementById("tech-replace")?.checked);
+        const logEl = document.getElementById("tech-import-log");
+        const submitBtn = document.getElementById("admin-tech-submit");
+        if (!topic) {
+          toast("Enter a topic name.", true);
+          return;
+        }
+        if (!files || !files.length) {
+          toast("Choose the topic folder to import.", true);
+          return;
+        }
+        const parsed = parseTechnologyFolder(files);
+        if (!parsed.indexes.length) {
+          toast("No numbered images/audio/texts found in that folder.", true);
+          return;
+        }
+        if (submitBtn) submitBtn.disabled = true;
+        const log = (msg) => {
+          if (!logEl) return;
+          logEl.classList.remove("hidden");
+          logEl.textContent = (logEl.textContent ? logEl.textContent + "\n" : "") + msg;
+        };
+        if (logEl) {
+          logEl.classList.remove("hidden");
+          logEl.textContent = `Found ${parsed.indexes.length} page(s). Preparing upload…`;
+        }
+        try {
+          const pageSpecs = [];
+          for (const idx of parsed.indexes) {
+            const img = parsed.images.get(idx);
+            const aud = parsed.audios.get(idx);
+            const txtFile = parsed.texts.get(idx);
+            let text = "";
+            let title = "";
+            if (txtFile) {
+              text = await txtFile.text();
+              const first = (text.split("\n").find((ln) => ln.trim()) || "").trim();
+              title = first.slice(0, 160);
+            }
+            const imgName = (img && img.name) || "page.jpg";
+            const audName = (aud && aud.name) || "";
+            const imgExt = (imgName.split(".").pop() || "jpg").toLowerCase();
+            const audExt = audName ? (audName.split(".").pop() || "mp3").toLowerCase() : "";
+            pageSpecs.push({
+              index: idx,
+              title,
+              text: (text || "").slice(0, 8000),
+              image_ext: imgExt,
+              audio_ext: audExt,
+              image_content_type: (img && img.type) || guessTechMime(imgExt),
+              audio_content_type: aud
+                ? aud.type || guessTechMime(audExt)
+                : "",
+            });
+          }
+          const started = await Api.startTechnologyTopic(token(), {
+            topic,
+            grade_level: grade || null,
+            description: parsed.pptx ? `From ${parsed.pptx.name}` : "",
+            pages: pageSpecs,
+            replace,
+          });
+          const uploads = started.uploads || [];
+          log(`Uploading media for ${uploads.length} page(s)…`);
+          let done = 0;
+          for (const up of uploads) {
+            const img = parsed.images.get(up.index);
+            const aud = parsed.audios.get(up.index);
+            if (img && up.image_put_url) {
+              await putTechFile(up.image_put_url, img, up.image_content_type);
+            }
+            if (aud && up.audio_put_url) {
+              await putTechFile(up.audio_put_url, aud, up.audio_content_type);
+            }
+            done += 1;
+            if (logEl) logEl.textContent = `Uploaded ${done}/${uploads.length} page(s)…`;
+          }
+          await Api.completeTechnologyTopic(token(), started.subject_id);
+          toast(`Technology topic “${topic}” is ready (${parsed.indexes.length} pages)`);
+          StudyCache.invalidateLanding();
+          render();
+        } catch (err) {
+          toast(err.message || String(err), true);
+          log(err.message || String(err));
+        } finally {
+          if (submitBtn) submitBtn.disabled = false;
+        }
+      };
+    }
+
     const excelForm = document.getElementById("admin-excel-form");
     if (excelForm) {
       excelForm.onsubmit = async (e) => {
@@ -6554,9 +6775,12 @@ const App = (() => {
     if (studyTopic) {
       studyTopic.onchange = () => {
         state.studySubjectId = studyTopic.value || null;
+        state.techPageIndex = 0;
         render();
       };
     }
+
+    bindTechnologyReader();
 
     // Assessment setup: Category + base Topic + Start
     const assessCat = document.getElementById("assess-category");
@@ -6872,6 +7096,110 @@ const App = (() => {
         }
       }
       throw e;
+    }
+  }
+
+  function bindTechnologyReader() {
+    const book = document.getElementById("tech-book");
+    if (!book) return;
+    const reader = document.getElementById("tech-reader");
+    const count = parseInt(reader?.getAttribute("data-page-count") || "0", 10);
+    const go = (delta) => {
+      const next = (state.techPageIndex || 0) + delta;
+      if (next < 0 || next >= count) return;
+      const pageEl = document.getElementById("tech-page");
+      if (pageEl) {
+        pageEl.classList.remove("tech-flip-left", "tech-flip-right");
+        void pageEl.offsetWidth;
+        pageEl.classList.add(delta > 0 ? "tech-flip-left" : "tech-flip-right");
+      }
+      window.setTimeout(() => {
+        state.techPageIndex = next;
+        render();
+      }, 220);
+    };
+    const prev = document.getElementById("tech-prev");
+    const nextBtn = document.getElementById("tech-next");
+    if (prev) prev.onclick = () => go(-1);
+    if (nextBtn) nextBtn.onclick = () => go(1);
+    let startX = 0;
+    book.addEventListener(
+      "touchstart",
+      (ev) => {
+        startX = ev.changedTouches[0]?.clientX || 0;
+      },
+      { passive: true }
+    );
+    book.addEventListener(
+      "touchend",
+      (ev) => {
+        const endX = ev.changedTouches[0]?.clientX || 0;
+        const dx = endX - startX;
+        if (Math.abs(dx) < 40) return;
+        go(dx < 0 ? 1 : -1);
+      },
+      { passive: true }
+    );
+  }
+
+  function guessTechMime(ext) {
+    const e = String(ext || "").toLowerCase().replace(/^\./, "");
+    const map = {
+      jpg: "image/jpeg",
+      jpeg: "image/jpeg",
+      png: "image/png",
+      webp: "image/webp",
+      gif: "image/gif",
+      mp3: "audio/mpeg",
+      m4a: "audio/mp4",
+      aac: "audio/aac",
+      wav: "audio/wav",
+      ogg: "audio/ogg",
+    };
+    return map[e] || "application/octet-stream";
+  }
+
+  function parseTechnologyFolder(fileList) {
+    const images = new Map();
+    const audios = new Map();
+    const texts = new Map();
+    let pptx = null;
+    const files = Array.from(fileList || []);
+    for (const f of files) {
+      const rel = String(f.webkitRelativePath || f.name || "").replace(/\\/g, "/");
+      const base = rel.split("/").pop() || "";
+      if (!base || base.startsWith("~$") || base.startsWith(".")) continue;
+      const low = rel.toLowerCase();
+      if (low.includes("index")) continue;
+      if (low.endsWith(".pptx")) {
+        pptx = f;
+        continue;
+      }
+      const m = base.match(/^(\d{1,3})/);
+      if (!m) continue;
+      const n = parseInt(m[1], 10);
+      if (/\/images\//.test(low) && /\.(jpe?g|png|webp|gif)$/.test(low)) {
+        images.set(n, f);
+      } else if (/\/audio\//.test(low) && /\.(mp3|m4a|aac|wav|ogg)$/.test(low)) {
+        audios.set(n, f);
+      } else if (/\/texts?\//.test(low) && low.endsWith(".txt")) {
+        texts.set(n, f);
+      }
+    }
+    const indexes = [
+      ...new Set([...images.keys(), ...audios.keys(), ...texts.keys()]),
+    ].sort((a, b) => a - b);
+    return { pptx, images, audios, texts, indexes };
+  }
+
+  async function putTechFile(url, file, contentType) {
+    const res = await fetch(url, {
+      method: "PUT",
+      headers: { "Content-Type": contentType || file.type || "application/octet-stream" },
+      body: file,
+    });
+    if (!res.ok) {
+      throw new Error(`Upload failed (${res.status}) for ${file.name}`);
     }
   }
 
