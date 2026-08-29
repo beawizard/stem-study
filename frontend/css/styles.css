@@ -1562,7 +1562,7 @@ body.admin-mode .table-wrap {
   display: block;
   width: 100%;
   height: auto;
-  max-height: 52vh;
+  max-height: 70vh;
   object-fit: contain;
   background: #ecfeff;
 }
@@ -1609,14 +1609,26 @@ body.admin-mode .table-wrap {
 }
 .tech-subtitle {
   margin-top: 0.65rem;
-  padding: 0.75rem 0.9rem;
+  padding: 0.7rem 0.8rem;
   border-radius: 12px;
   background: rgba(15, 23, 42, 0.88);
   color: #f8fafc;
-  font-size: 0.95rem;
-  line-height: 1.5;
-  overflow: visible;
+  font-size: 0.92rem;
+  line-height: 1.35;
+  max-height: 6.2rem;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+  overscroll-behavior: contain;
+  touch-action: pan-y;
   word-wrap: break-word;
+  scrollbar-width: thin;
+}
+.tech-subtitle::-webkit-scrollbar {
+  width: 6px;
+}
+.tech-subtitle::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.45);
+  border-radius: 99px;
 }
 .tech-swipe-hint {
   font-size: 0.8rem;
