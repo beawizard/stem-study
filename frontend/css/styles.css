@@ -1562,7 +1562,7 @@ body.admin-mode .table-wrap {
   display: block;
   width: 100%;
   height: auto;
-  max-height: 70vh;
+  max-height: 52vh;
   object-fit: contain;
   background: #ecfeff;
 }
@@ -1609,14 +1609,14 @@ body.admin-mode .table-wrap {
 }
 .tech-subtitle {
   margin-top: 0.65rem;
-  padding: 0.7rem 0.8rem;
+  padding: 0.75rem 0.9rem;
   border-radius: 12px;
   background: rgba(15, 23, 42, 0.88);
   color: #f8fafc;
-  font-size: 0.92rem;
-  line-height: 1.35;
-  max-height: 6.2rem;
-  overflow-y: auto;
+  font-size: 0.95rem;
+  line-height: 1.5;
+  overflow: visible;
+  word-wrap: break-word;
 }
 .tech-swipe-hint {
   font-size: 0.8rem;

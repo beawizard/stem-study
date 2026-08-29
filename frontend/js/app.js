@@ -1589,12 +1589,8 @@ const App = (() => {
     }
     const i = state.techPageIndex;
     const page = pages[i] || pages[0];
-    const subtitle = String(page.text || "")
-      .split("\n")
-      .map((ln) => ln.trim())
-      .filter(Boolean)
-      .slice(0, 6)
-      .join(" ");
+    const subtitleHtml =
+      formatTechPageText(page.text) || escapeHtml(page.title || "");
     const grade = detail.grade_level
       ? `<span class="study-grade-badge">${escapeHtml(detail.grade_level)}</span>`
       : "";
@@ -1624,7 +1620,7 @@ const App = (() => {
             i >= pages.length - 1 ? "disabled" : ""
           }>›</button>
         </div>
-        <div class="tech-subtitle" id="tech-subtitle">${escapeHtml(subtitle || page.title || "")}</div>
+        <div class="tech-subtitle" id="tech-subtitle">${subtitleHtml}</div>
         ${
           page.audio_url
             ? `<audio id="tech-audio" src="${escapeAttr(page.audio_url)}" autoplay></audio>`
@@ -6994,6 +6990,13 @@ const App = (() => {
       .replace(/</g, "&lt;")
       .replace(/>/g, "&gt;")
       .replace(/"/g, "&quot;");
+  }
+
+  /** Full lesson transcript under the picture — keep line breaks, no truncation. */
+  function formatTechPageText(raw) {
+    const text = String(raw || "").replace(/\r\n/g, "\n").trim();
+    if (!text) return "";
+    return escapeHtml(text).replace(/\n/g, "<br>");
   }
 
   function escapeAttr(s) {
