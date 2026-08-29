@@ -1474,6 +1474,64 @@ body.admin-mode .table-wrap {
 .study-landing-card {
   overflow: visible;
 }
+.study-hub-card h1 {
+  margin-bottom: 0.35rem;
+}
+.stem-tile-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.75rem;
+  margin-top: 1rem;
+}
+.stem-tile {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  text-align: left;
+  min-height: 8.5rem;
+  padding: 0.95rem 0.9rem;
+  border: 2px solid #99f6e4;
+  border-radius: 16px;
+  background: linear-gradient(160deg, #ffffff 0%, #f0fdfa 70%);
+  color: var(--ink);
+  box-shadow: 0 4px 14px rgba(15, 118, 110, 0.08);
+}
+.stem-tile h2 {
+  margin: 0 0 0.35rem;
+  font-size: 1.05rem;
+  color: var(--brand-dark);
+}
+.stem-tile p {
+  margin: 0 !important;
+  font-size: 0.82rem;
+}
+.stem-tile:hover:not(.stem-tile-disabled) {
+  border-color: var(--brand);
+  transform: translateY(-1px);
+}
+.stem-tile-disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+  background: #f8fafc;
+  border-color: #e2e8f0;
+  box-shadow: none;
+}
+.stem-tile-soon {
+  margin-top: auto;
+  padding-top: 0.65rem;
+  font-size: 0.72rem;
+  font-weight: 800;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+.stem-tile-mathematics { border-color: #5eead4; }
+.stem-tile-technology { border-color: #7dd3fc; }
+@media (max-width: 380px) {
+  .stem-tile-grid { gap: 0.55rem; }
+  .stem-tile { min-height: 7.5rem; padding: 0.8rem 0.7rem; }
+}
+
 .study-header {
   display: flex;
   flex-wrap: wrap;

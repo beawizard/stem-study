@@ -24,6 +24,7 @@ const App = (() => {
     adminSubjectId: null,
     adminLevelId: null,
     // Study page subject pickers (Category + Topic, same model as Admin)
+    studyView: "hub", // hub (STEM tiles) | math | tech
     studyCategory: null,
     studySubjectId: null,
     studyFocusLevelId: null, // deep-link from Insights level link
@@ -360,6 +361,14 @@ const App = (() => {
     if (route === "admin" && !Auth.isAdmin()) {
       toast("Admin access required.", true);
       route = "home";
+    }
+    // Top-level Study / Home → Study opens STEM tiles unless a session or deep-link is active
+    if (
+      route === "study" &&
+      !(state.session && state.studyPhase) &&
+      !state.studyFocusLevelId
+    ) {
+      state.studyView = "hub";
     }
     // Assessment sessions must not leak into Study; clear when leaving Assessment
     if (
@@ -1424,10 +1433,157 @@ const App = (() => {
       </div>`;
   }
 
+  function viewStudyHub() {
+    const tiles = [
+      {
+        id: "Science",
+        title: "Science",
+        blurb: "Explore the natural world.",
+        enabled: false,
+      },
+      {
+        id: "Technology",
+        title: "Technology",
+        blurb: "Computers, coding, and digital skills.",
+        enabled: true,
+      },
+      {
+        id: "Engineering",
+        title: "Engineering",
+        blurb: "Design and build solutions.",
+        enabled: false,
+      },
+      {
+        id: "Mathematics",
+        title: "Mathematics",
+        blurb: "Arithmetic, fluency, and problem solving.",
+        enabled: true,
+      },
+    ];
+    const cards = tiles
+      .map((t) => {
+        if (!t.enabled) {
+          return `<div class="stem-tile stem-tile-disabled" aria-disabled="true">
+            <h2>${escapeHtml(t.title)}</h2>
+            <p class="muted">${escapeHtml(t.blurb)}</p>
+            <span class="stem-tile-soon">Coming soon</span>
+          </div>`;
+        }
+        return `<button type="button" class="stem-tile stem-tile-${t.id.toLowerCase()}"
+            data-study-stem="${escapeAttr(t.id)}">
+            <h2>${escapeHtml(t.title)}</h2>
+            <p class="muted">${escapeHtml(t.blurb)}</p>
+          </button>`;
+      })
+      .join("");
+    return `
+      <div class="card study-hub-card">
+        <h1>Study</h1>
+        <p class="muted">Choose a STEM area to begin.</p>
+        <div class="stem-tile-grid">${cards}</div>
+      </div>`;
+  }
+
+  async function viewStudyTechnology() {
+    const tok = token();
+    let allSubjects = [];
+    try {
+      const data = await StudyCache.loadStudyData(tok, null);
+      allSubjects = data.subjects || [];
+    } catch (e) {
+      return `<div class="card">
+        <button type="button" class="btn secondary btn-sm" data-study-hub>← Study</button>
+        <h1>Technology</h1>
+        <p class="muted">${escapeHtml(e.message || "Could not load topics.")}</p>
+      </div>`;
+    }
+
+    const techSubjects = allSubjects.filter(
+      (s) => (s.category || "") === "Technology"
+    );
+    const categories = [
+      ...new Set(techSubjects.map((s) => s.category || "Technology")),
+    ];
+    if (!categories.length) categories.push("Technology");
+    if (!state.studyCategory || !categories.includes(state.studyCategory)) {
+      state.studyCategory = "Technology";
+    }
+    const topics = techSubjects
+      .filter((s) => (s.category || "Technology") === state.studyCategory)
+      .slice()
+      .sort((a, b) =>
+        String(a.topic || a.name || "").localeCompare(
+          String(b.topic || b.name || "")
+        )
+      );
+    if (
+      state.studySubjectId &&
+      !topics.some((s) => s.subject_id === state.studySubjectId)
+    ) {
+      state.studySubjectId = null;
+    }
+    const categoryOptions = categories
+      .map(
+        (c) =>
+          `<option value="${escapeAttr(c)}" ${
+            c === state.studyCategory ? "selected" : ""
+          }>${escapeHtml(c)}</option>`
+      )
+      .join("");
+    const topicOptions = topics.length
+      ? [`<option value="">Select a topic…</option>`]
+          .concat(
+            topics.map(
+              (s) =>
+                `<option value="${escapeAttr(s.subject_id)}" ${
+                  s.subject_id === state.studySubjectId ? "selected" : ""
+                }>${escapeHtml(s.topic || s.name || s.subject_id)}</option>`
+            )
+          )
+          .join("")
+      : `<option value="">No topics yet</option>`;
+
+    const selected = topics.find((s) => s.subject_id === state.studySubjectId);
+    return `
+      <div class="card study-landing-card">
+        <button type="button" class="btn secondary btn-sm" data-study-hub>← Study</button>
+        <h1 class="study-page-title" style="margin-top:0.5rem">Technology</h1>
+        <div class="study-pickers study-pickers-stacked" style="max-width:22rem;margin-top:0.75rem">
+          <div class="study-picker-field">
+            <label for="study-category">Category</label>
+            <select id="study-category">${categoryOptions}</select>
+          </div>
+          <div class="study-picker-field">
+            <label for="study-topic">Topic</label>
+            <select id="study-topic" ${topics.length ? "" : "disabled"}>${topicOptions}</select>
+          </div>
+        </div>
+        ${
+          selected
+            ? `<p class="muted study-topic-desc">${escapeHtml(
+                selected.description || selected.topic || ""
+              )}</p>`
+            : `<p class="muted study-topic-desc">Select a Technology topic. Question sets for this area will appear here as they are published.</p>`
+        }
+      </div>`;
+  }
+
   async function viewStudy() {
     try {
       if (state.session && state.studyPhase && !state.session.is_assessment) {
         return viewSession();
+      }
+
+      if (state.studyFocusLevelId && state.studyView === "hub") {
+        const cat = state.studyCategory || "Mathematics";
+        state.studyView = cat === "Technology" ? "tech" : "math";
+      }
+
+      if (!state.studyView || state.studyView === "hub") {
+        return viewStudyHub();
+      }
+      if (state.studyView === "tech") {
+        return viewStudyTechnology();
       }
 
       const tok = token();
@@ -1456,6 +1612,11 @@ const App = (() => {
         if (ib === -1) return -1;
         return ia - ib;
       });
+
+      // Math tile: stay on Mathematics (existing Study levels UI)
+      if (state.studyView === "math") {
+        state.studyCategory = "Mathematics";
+      }
 
       // Restore / default Category
       if (
@@ -1556,7 +1717,14 @@ const App = (() => {
         }
       }
 
-      const categoryOptions = categoriesPresent
+      const categoryChoices =
+        state.studyView === "math"
+          ? categoriesPresent.filter((c) => c === "Mathematics")
+          : categoriesPresent;
+      const categoryOptions = (categoryChoices.length
+        ? categoryChoices
+        : ["Mathematics"]
+      )
         .map(
           (c) =>
             `<option value="${escapeAttr(c)}" ${
@@ -1630,10 +1798,13 @@ const App = (() => {
 
       return `
         <div class="card study-landing-card">
-          <div class="study-header">
+          <button type="button" class="btn secondary btn-sm" data-study-hub>← Study</button>
+          <div class="study-header" style="margin-top:0.5rem">
             <div class="study-header-main">
               <div class="study-title-row">
-                <h1 class="study-page-title">Study</h1>
+                <h1 class="study-page-title">${escapeHtml(
+                  state.studyCategory || "Study"
+                )}</h1>
                 ${
                   gradeLabel
                     ? `<div class="study-grade-badge" title="Content grade level">${escapeHtml(
@@ -6328,6 +6499,8 @@ const App = (() => {
         if (subjectId) state.studySubjectId = subjectId;
         if (category) state.studyCategory = category;
         if (levelId) state.studyFocusLevelId = levelId;
+        state.studyView =
+          category === "Technology" ? "tech" : "math";
         navigate("study");
       };
     });
@@ -6340,6 +6513,31 @@ const App = (() => {
           toast(e.message, true);
           if (e.status === 402) navigate("pay");
         }
+      };
+    });
+
+    main().querySelectorAll("[data-study-hub]").forEach((b) => {
+      b.onclick = () => {
+        state.studyView = "hub";
+        state.studyFocusLevelId = null;
+        render();
+      };
+    });
+    main().querySelectorAll("[data-study-stem]").forEach((b) => {
+      b.onclick = () => {
+        const stem = b.getAttribute("data-study-stem");
+        if (stem === "Mathematics") {
+          state.studyView = "math";
+          state.studyCategory = "Mathematics";
+          state.studySubjectId = null;
+        } else if (stem === "Technology") {
+          state.studyView = "tech";
+          state.studyCategory = "Technology";
+          state.studySubjectId = null;
+        } else {
+          return;
+        }
+        render();
       };
     });
 
