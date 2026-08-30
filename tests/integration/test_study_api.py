@@ -98,6 +98,16 @@ def test_study_session_pass_and_unlock(dynamodb_table, admin_headers, user_heade
     assert me["total_study_ms"] >= 12500
     assert me["study_sessions_count"] >= 1
 
+    usage = json.loads(
+        handler(
+            make_event("GET", "/admin/topics/math/usage", headers=admin_headers)
+        )["body"]
+    )
+    assert usage["users"]
+    assert usage["users"][0]["total_ms"] >= 12500
+    assert usage["users"][0]["first_access_at"]
+    assert usage["users"][0]["last_access_at"]
+
     # Progress completed
     resp = handler(
         make_event(

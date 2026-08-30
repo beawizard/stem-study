@@ -53,6 +53,8 @@ const App = (() => {
     masteryActive: null, // selected published collection
     masterySubjectId: null, // topic (subject) within active collection
     techPageIndex: 0,
+    adminUsageCategory: null,
+    adminUsageSubjectId: null,
   };
 
   /**
@@ -1619,7 +1621,9 @@ const App = (() => {
       ? `<span class="study-grade-badge">${escapeHtml(detail.grade_level)}</span>`
       : "";
     return `
-      <div class="tech-reader" id="tech-reader" data-page-count="${pages.length}">
+      <div class="tech-reader" id="tech-reader" data-page-count="${pages.length}" data-subject-id="${escapeAttr(
+        detail.subject_id || ""
+      )}">
         <div class="tech-reader-meta">
           <strong>${escapeHtml(detail.topic || detail.name || "Topic")}</strong>
           ${grade}
@@ -2794,6 +2798,7 @@ const App = (() => {
       </div>`;
     }
 
+    state._adminSubjects = subjects;
     if (!state.adminSubjectId && subjects.length) {
       state.adminSubjectId = subjects[0].subject_id;
     }
@@ -2982,12 +2987,81 @@ const App = (() => {
       })
       .join("");
 
+    const stemCats = ["Science", "Technology", "Engineering", "Mathematics"];
+    const usageCatPresent = [
+      ...new Set(subjects.map((s) => s.category || "Mathematics").filter(Boolean)),
+    ];
+    if (
+      !state.adminUsageCategory ||
+      !stemCats.includes(state.adminUsageCategory)
+    ) {
+      state.adminUsageCategory =
+        usageCatPresent.find((c) => c === "Mathematics") ||
+        usageCatPresent[0] ||
+        "Mathematics";
+    }
+    const usageTopics = subjects.filter(
+      (s) => (s.category || "Mathematics") === state.adminUsageCategory
+    );
+    if (
+      state.adminUsageSubjectId &&
+      !usageTopics.some((s) => s.subject_id === state.adminUsageSubjectId)
+    ) {
+      state.adminUsageSubjectId = null;
+    }
+    const usageCatOptions = stemCats
+      .map(
+        (c) =>
+          `<option value="${escapeHtml(c)}" ${
+            c === state.adminUsageCategory ? "selected" : ""
+          }>${escapeHtml(c)}</option>`
+      )
+      .join("");
+    const usageTopicOptions = usageTopics.length
+      ? `<option value="">Select a topic…</option>` +
+        usageTopics
+          .map(
+            (s) =>
+              `<option value="${escapeAttr(s.subject_id)}" ${
+                s.subject_id === state.adminUsageSubjectId ? "selected" : ""
+              }>${escapeHtml(s.topic || s.name || s.subject_id)}</option>`
+          )
+          .join("")
+      : `<option value="">No topics yet</option>`;
+
     return `
       <div class="card">
         <h1>Admin · Content</h1>
-        <p class="muted">Manage subjects by STEM category and topic, then levels and question banks via CSV or multi-sheet Excel.</p>
-        <div class="row" style="margin-top:0.75rem">
-          <button type="button" class="btn secondary" id="admin-seed">Seed Math defaults</button>
+        <p class="muted">Who used each topic: time on it, first visit, and last visit (top 100).</p>
+        <div class="study-pickers study-pickers-stacked" style="max-width:22rem;margin-top:0.75rem">
+          <div class="study-picker-field">
+            <label for="usage-category">Category</label>
+            <select id="usage-category">${usageCatOptions}</select>
+          </div>
+          <div class="study-picker-field">
+            <label for="usage-topic">Topic</label>
+            <select id="usage-topic" ${usageTopics.length ? "" : "disabled"}>${usageTopicOptions}</select>
+          </div>
+        </div>
+        <div class="table-wrap usage-wrap" style="margin-top:1rem">
+          <table class="data-table usage-table">
+            <thead>
+              <tr>
+                <th>User</th>
+                <th>Grade</th>
+                <th>Mins</th>
+                <th>First</th>
+                <th>Last</th>
+              </tr>
+            </thead>
+            <tbody id="usage-tbody">
+              <tr><td colspan="5" class="muted">${
+                state.adminUsageSubjectId
+                  ? "Loading usage…"
+                  : "Select a topic to see usage."
+              }</td></tr>
+            </tbody>
+          </table>
         </div>
       </div>
 
@@ -3084,6 +3158,9 @@ const App = (() => {
 
       <div class="card">
         <h2>Subjects</h2>
+        <div class="row" style="margin-bottom:0.75rem">
+          <button type="button" class="btn secondary" id="admin-seed">Seed Math defaults</button>
+        </div>
         <form id="admin-subject-form" class="stack">
           <div class="row">
             <div class="grow">
@@ -4919,6 +4996,7 @@ const App = (() => {
       setNavVisible(false);
       setAdminModeUi(false);
       setTechModeUi(false);
+      stopTechAccessTracking();
       el.innerHTML = viewAuth();
       bindAuth();
       return;
@@ -4955,6 +5033,7 @@ const App = (() => {
         html = viewHome(boardEntries);
         break;
     }
+    stopTechAccessTracking();
     el.innerHTML = html;
     setTechModeUi(state.route === "study" && state.studyView === "tech");
     updateNavProfileAvatar();
@@ -5696,6 +5775,94 @@ const App = (() => {
     return `<svg class="action-svg" viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><polyline points="17 21 17 13 7 13 7 21"/><polyline points="7 3 7 8 15 8"/></svg>`;
   }
 
+  function formatAccessDay(iso) {
+    const s = String(iso || "").trim();
+    return s ? s.slice(0, 10) : "—";
+  }
+
+  function formatAccessMins(mins) {
+    const n = Number(mins);
+    if (!Number.isFinite(n) || n <= 0) return "0";
+    if (n < 1) return "<1";
+    return n >= 10 ? String(Math.round(n)) : n.toFixed(1);
+  }
+
+  function usageTopicOptionsHtml(category) {
+    const subjects = state._adminSubjects || [];
+    const topics = subjects.filter(
+      (s) => (s.category || "Mathematics") === category
+    );
+    if (!topics.length) return `<option value="">No topics yet</option>`;
+    return (
+      `<option value="">Select a topic…</option>` +
+      topics
+        .map(
+          (s) =>
+            `<option value="${escapeAttr(s.subject_id)}">${escapeHtml(
+              s.topic || s.name || s.subject_id
+            )}</option>`
+        )
+        .join("")
+    );
+  }
+
+  async function loadTopicUsageTable(subjectId) {
+    const tbody = document.getElementById("usage-tbody");
+    if (!tbody) return;
+    if (!subjectId) {
+      tbody.innerHTML = `<tr><td colspan="5" class="muted">Select a topic to see usage.</td></tr>`;
+      return;
+    }
+    tbody.innerHTML = `<tr><td colspan="5" class="muted">Loading usage…</td></tr>`;
+    try {
+      const data = await Api.topicUsage(token(), subjectId);
+      const users = (data && data.users) || [];
+      if (!users.length) {
+        tbody.innerHTML = `<tr><td colspan="5" class="muted">No access recorded yet. Time is tracked when learners study this topic.</td></tr>`;
+        return;
+      }
+      tbody.innerHTML = users
+        .map(
+          (u) => `<tr>
+            <td class="usage-user">${escapeHtml(u.nickname || "Learner")}</td>
+            <td>${escapeHtml(u.grade_level || "—")}</td>
+            <td class="num">${escapeHtml(formatAccessMins(u.total_mins))}</td>
+            <td>${escapeHtml(formatAccessDay(u.first_access_at))}</td>
+            <td>${escapeHtml(formatAccessDay(u.last_access_at))}</td>
+          </tr>`
+        )
+        .join("");
+    } catch (e) {
+      tbody.innerHTML = `<tr><td colspan="5" class="muted">${escapeHtml(
+        (e && e.message) || "Could not load usage."
+      )}</td></tr>`;
+    }
+  }
+
+  function bindAdminUsagePickers() {
+    const cat = document.getElementById("usage-category");
+    const topic = document.getElementById("usage-topic");
+    if (!cat || !topic) return;
+    cat.onchange = () => {
+      state.adminUsageCategory = cat.value || "Mathematics";
+      state.adminUsageSubjectId = null;
+      const subjects = state._adminSubjects || [];
+      const topics = subjects.filter(
+        (s) => (s.category || "Mathematics") === state.adminUsageCategory
+      );
+      topic.disabled = !topics.length;
+      topic.innerHTML = usageTopicOptionsHtml(state.adminUsageCategory);
+      loadTopicUsageTable(null);
+    };
+    topic.onchange = () => {
+      state.adminUsageSubjectId = topic.value || null;
+      loadTopicUsageTable(state.adminUsageSubjectId);
+    };
+    if (state.adminUsageSubjectId) {
+      loadTopicUsageTable(state.adminUsageSubjectId);
+    }
+  }
+
   function bindAdmin() {
     const root = main();
 
@@ -5703,6 +5870,8 @@ const App = (() => {
     if (retryLoad) {
       retryLoad.onclick = () => render();
     }
+
+    bindAdminUsagePickers();
 
     // Schools: add / edit form
     const schoolForm = document.getElementById("admin-school-form");
@@ -7112,10 +7281,71 @@ const App = (() => {
     }
   }
 
+  function pingTopicAccess(subjectId, elapsedMs, { keepalive = false } = {}) {
+    const sid = String(subjectId || "").trim();
+    if (!sid || !Auth.isLoggedIn()) return Promise.resolve();
+    const ms = Math.max(0, Math.min(300000, Math.round(Number(elapsedMs) || 0)));
+    const body = { subject_id: sid, elapsed_ms: ms };
+    try {
+      return Api.recordTopicAccess(token(), body).catch(() => {});
+    } catch (_) {
+      return Promise.resolve();
+    }
+  }
+
+  function stopTechAccessTracking() {
+    const st = state._techAccess;
+    if (!st) return;
+    if (st.timer) clearInterval(st.timer);
+    if (st.onVis) document.removeEventListener("visibilitychange", st.onVis);
+    const ms = Date.now() - (st.lastAt || Date.now());
+    const sid = st.subjectId;
+    state._techAccess = null;
+    if (sid && ms > 400) pingTopicAccess(sid, ms, { keepalive: true });
+  }
+
+  function startTechAccessTracking(subjectId) {
+    const sid = String(subjectId || "").trim();
+    stopTechAccessTracking();
+    if (!sid) return;
+    const tick = () => {
+      const cur = state._techAccess;
+      if (!cur || document.visibilityState === "hidden") return;
+      const now = Date.now();
+      const ms = now - cur.lastAt;
+      cur.lastAt = now;
+      if (ms > 400) pingTopicAccess(cur.subjectId, ms);
+    };
+    const onVis = () => {
+      const cur = state._techAccess;
+      if (!cur) return;
+      if (document.visibilityState === "hidden") {
+        const now = Date.now();
+        const ms = now - cur.lastAt;
+        cur.lastAt = now;
+        if (ms > 400) pingTopicAccess(cur.subjectId, ms, { keepalive: true });
+      } else {
+        cur.lastAt = Date.now();
+      }
+    };
+    state._techAccess = {
+      subjectId: sid,
+      lastAt: Date.now(),
+      timer: window.setInterval(tick, 15000),
+      onVis,
+    };
+    pingTopicAccess(sid, 0);
+    document.addEventListener("visibilitychange", onVis);
+  }
+
   function bindTechnologyReader() {
     const book = document.getElementById("tech-book");
-    if (!book) return;
     const reader = document.getElementById("tech-reader");
+    if (!book) {
+      stopTechAccessTracking();
+      return;
+    }
+    startTechAccessTracking(reader?.getAttribute("data-subject-id") || "");
     const count = parseInt(reader?.getAttribute("data-page-count") || "0", 10);
     const go = (delta) => {
       const next = (state.techPageIndex || 0) + delta;

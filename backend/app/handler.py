@@ -31,6 +31,8 @@ Routes (all require Cognito JWT unless noted):
   GET               /study/bootstrap?subject_id=   (subjects + landing, one round-trip)
   GET               /insights   (?notices=1 optional; default skips content_notices)
   GET               /leaderboard                 (top 100 by XP: Rank, Name, XP, Grade)
+  POST              /study/access                (learner heartbeat: topic minutes)
+  GET               /admin/topics/{id}/usage     (admin — top 100 users on a topic)
   GET|POST          /mastery                     (list published / create+publish collection)
   GET|PUT|DELETE    /mastery/{mastery_id}
   POST              /payments
@@ -65,6 +67,7 @@ from app.response import (
     unprocessable,
 )
 from app.services import (
+    access_service,
     insights_service,
     mastery_service,
     payment_service,
@@ -110,6 +113,7 @@ from app.validation import (
     TaskCreate,
     TaskUpdate,
     TechnologyTopicCreate,
+    TopicAccessPing,
     parse_body,
 )
 
@@ -135,6 +139,7 @@ _ASSESSMENT_COMPLETE = re.compile(r"^/study/assessment/([^/]+)/complete$")
 _ADMIN_VERIFY = re.compile(r"^/admin/payments/([^/]+)/([^/]+)/verify$")
 _SCHOOL_ID = re.compile(r"^/schools/([^/]+)$")
 _SCHOOL_APPROVE = re.compile(r"^/schools/([^/]+)/approve$")
+_ADMIN_TOPIC_USAGE = re.compile(r"^/admin/topics/([^/]+)/usage$")
 
 
 def handler(event: dict[str, Any], context: Any = None) -> dict[str, Any]:
@@ -720,6 +725,36 @@ def _route(
     if method == "POST" and path == "/admin/seed":
         require_admin(user)
         return ok(subject_service.seed_math_defaults())
+
+    if method == "POST" and path == "/study/access":
+        data = parse_body(TopicAccessPing, body)
+        try:
+            item = access_service.record_topic_access(
+                user.user_id,
+                data.subject_id,
+                elapsed_ms=data.elapsed_ms,
+            )
+            return ok(
+                {
+                    "subject_id": item.get("subject_id"),
+                    "total_ms": int(item.get("total_ms") or 0),
+                    "first_access_at": item.get("first_access_at") or "",
+                    "last_access_at": item.get("last_access_at") or "",
+                }
+            )
+        except SubjectNotFound:
+            return not_found("Topic not found")
+        except ValueError as exc:
+            return bad_request(str(exc))
+
+    m_usage = _ADMIN_TOPIC_USAGE.match(path)
+    if m_usage and method == "GET":
+        require_admin(user)
+        sid = unquote(m_usage.group(1))
+        try:
+            return ok(access_service.list_topic_usage(sid, limit=100))
+        except SubjectNotFound:
+            return not_found("Topic not found")
 
     # --- Technology presentation topics ---
     if method == "GET" and path == "/technology/topics":

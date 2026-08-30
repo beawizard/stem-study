@@ -141,6 +141,10 @@ const Api = (() => {
         method: "POST",
         token,
       }),
+    recordTopicAccess: (token, body) =>
+      request("/study/access", { method: "POST", body, token }),
+    topicUsage: (token, subjectId) =>
+      request(`/admin/topics/${encodeURIComponent(subjectId)}/usage`, { token }),
     updateSubject: (token, subjectId, body) =>
       request(`/subjects/${encodeURIComponent(subjectId)}`, {
         method: "PUT",

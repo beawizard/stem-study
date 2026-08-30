@@ -448,6 +448,22 @@ class SessionComplete(BaseModel):
     answers: list[SessionAnswerItem] = Field(..., min_length=1, max_length=500)
 
 
+class TopicAccessPing(BaseModel):
+    """POST /study/access — learner heartbeat while a topic is open."""
+
+    model_config = ConfigDict(str_strip_whitespace=True, extra="forbid")
+
+    subject_id: str = Field(..., min_length=1, max_length=MAX_SUBJECT_ID_LEN)
+    elapsed_ms: int = Field(default=0, ge=0, le=300_000)
+
+    @field_validator("subject_id")
+    @classmethod
+    def validate_subject_id(cls, v: str) -> str:
+        if not SUBJECT_ID_PATTERN.match(v):
+            raise ValueError("Invalid subject_id format")
+        return v
+
+
 class StartSession(BaseModel):
     model_config = ConfigDict(str_strip_whitespace=True, extra="forbid")
 

@@ -9,6 +9,7 @@ USER#<sub>          / SESSION#<session_id>      study session
 USER#<sub>          / ATTEMPT#<session>#Q#<qid> answer attempt
 USER#<sub>          / PAYMENT#<payment_id>      GCash payment record
 USER#<sub>          / MASTERY#<id>              mastery topic collection
+USER#<sub>          / ACCESS#<subject_id>       topic access/usage (mins, first/last)
 SUBJECT#<id>        / META                      subject definition
 SUBJECT#<id>        / LEVEL#<level_id>          level definition
 SUBJECT#<id>        / LEVEL#<level_id>#Q#<qid>  question
@@ -23,6 +24,9 @@ GSI1 (for admin listings / reverse lookups):
      question rows under SK LEVEL#…#Q# are never scanned)
   For LEADERBOARD (USER META): GSI1SK = <inverted_xp:010d>#<user_id>
     (ascending query returns highest XP first for Home top-10)
+  For TOPIC ACCESS: GSI1PK = ENTITY#TOPIC_ACCESS#<subject_id>
+    GSI1SK = <inverted_total_ms:015d>#<user_id>
+    (ascending query returns highest time-on-topic first)
 """
 
 from __future__ import annotations
@@ -74,6 +78,11 @@ def mastery_sk(mastery_id: str) -> str:
     return f"MASTERY#{mastery_id}"
 
 
+def access_sk(subject_id: str) -> str:
+    """Per-user per-topic access/usage under USER#… / ACCESS#…"""
+    return f"ACCESS#{subject_id}"
+
+
 def subject_pk(subject_id: str) -> str:
     return f"SUBJECT#{subject_id}"
 
@@ -102,6 +111,18 @@ ENTITY_LEADERBOARD = "ENTITY#LEADERBOARD"
 # Admin-shared mastery packs visible to all learners
 ENTITY_MASTERY_SHARED = "ENTITY#MASTERY_SHARED"
 _LEADERBOARD_XP_PAD = 999_999_999
+# 15 digits covers centuries of accumulated milliseconds
+_TOPIC_ACCESS_MS_PAD = 10**15
+
+
+def topic_access_gsi1_pk(subject_id: str) -> str:
+    return f"ENTITY#TOPIC_ACCESS#{subject_id}"
+
+
+def topic_access_gsi1_sk(total_ms: int, user_id: str) -> str:
+    """GSI1SK for topic usage: inverted ms so most minutes sort first."""
+    inv = _TOPIC_ACCESS_MS_PAD - max(0, int(total_ms or 0))
+    return f"{inv:015d}#{user_id}"
 
 
 def leaderboard_gsi1_sk(xp: int, user_id: str) -> str:

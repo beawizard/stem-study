@@ -363,6 +363,13 @@ def start_session(user_id: str, subject_id: str, level_id: str) -> dict[str, Any
     }
     db.put_item(item)
 
+    try:
+        from app.services import access_service
+
+        access_service.record_topic_access(user_id, subject_id, elapsed_ms=0)
+    except Exception:
+        pass
+
     # Mark progress in_progress if not completed
     _upsert_progress(
         user_id,
@@ -507,6 +514,14 @@ def complete_session(
         accuracy=accuracy,
         passed=passed,
     )
+    try:
+        from app.services import access_service
+
+        access_service.record_topic_access(
+            user_id, session["subject_id"], elapsed_ms=elapsed
+        )
+    except Exception:
+        pass
     # Leaderboard XP is cumulative badge points; recompute after every exam
     try:
         user_service.refresh_user_xp(user_id)
