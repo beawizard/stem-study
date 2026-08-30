@@ -1044,22 +1044,76 @@ input:focus, textarea:focus, select:focus {
   color: var(--muted);
 }
 .data-table tr:last-child td { border-bottom: 0; }
+.usage-card {
+  padding-left: 0.8rem;
+  padding-right: 0.8rem;
+}
 .usage-wrap {
+  max-width: 100%;
   max-height: min(28rem, 70vh);
-  overflow: auto;
+  overflow-x: hidden;
+  overflow-y: auto;
 }
 .usage-table {
-  font-size: 0.82rem;
+  table-layout: fixed;
+  width: 100%;
+  font-size: 0.75rem;
 }
+.usage-col-user { width: 30%; }
+.usage-col-grade { width: 13%; }
+.usage-col-mins { width: 12%; }
+.usage-col-first,
+.usage-col-last { width: 22.5%; }
 .usage-table th,
 .usage-table td {
-  padding: 0.45rem 0.4rem;
+  padding: 0.38rem 0.22rem;
   white-space: nowrap;
-}
-.usage-table .usage-user {
-  max-width: 7.2rem;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+.usage-table thead th {
+  font-size: 0.68rem;
+  letter-spacing: 0.02em;
+}
+.usage-table .usage-mins {
+  text-align: right;
+}
+.usage-table td.muted {
+  white-space: normal;
+  text-overflow: unset;
+}
+.usage-g-full,
+.usage-d-full {
+  display: none;
+}
+@media (orientation: landscape) and (min-width: 640px) {
+  .usage-card {
+    padding-left: 1.1rem;
+    padding-right: 1.15rem;
+  }
+  .usage-table {
+    font-size: 0.88rem;
+  }
+  .usage-table th,
+  .usage-table td {
+    padding: 0.5rem 0.5rem;
+  }
+  .usage-table thead th {
+    font-size: 0.78rem;
+  }
+  .usage-col-user { width: 28%; }
+  .usage-col-grade { width: 16%; }
+  .usage-col-mins { width: 10%; }
+  .usage-col-first,
+  .usage-col-last { width: 23%; }
+  .usage-g-short,
+  .usage-d-short {
+    display: none;
+  }
+  .usage-g-full,
+  .usage-d-full {
+    display: inline;
+  }
 }
 .data-table code {
   font-size: 0.8rem;

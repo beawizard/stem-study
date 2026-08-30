@@ -3030,7 +3030,7 @@ const App = (() => {
       : `<option value="">No topics yet</option>`;
 
     return `
-      <div class="card">
+      <div class="card usage-card">
         <h1>Admin · Content</h1>
         <p class="muted">Who used each topic: time on it, first visit, and last visit (top 100).</p>
         <div class="study-pickers study-pickers-stacked" style="max-width:22rem;margin-top:0.75rem">
@@ -3045,6 +3045,13 @@ const App = (() => {
         </div>
         <div class="table-wrap usage-wrap" style="margin-top:1rem">
           <table class="data-table usage-table">
+            <colgroup>
+              <col class="usage-col-user" />
+              <col class="usage-col-grade" />
+              <col class="usage-col-mins" />
+              <col class="usage-col-first" />
+              <col class="usage-col-last" />
+            </colgroup>
             <thead>
               <tr>
                 <th>User</th>
@@ -5777,7 +5784,24 @@ const App = (() => {
 
   function formatAccessDay(iso) {
     const s = String(iso || "").trim();
-    return s ? s.slice(0, 10) : "—";
+    const m = s.match(/^(\d{4})-(\d{2})-(\d{2})/);
+    if (!m) return s ? s.slice(0, 10) : "—";
+    return `${parseInt(m[2], 10)}/${parseInt(m[3], 10)}/${m[1].slice(-2)}`;
+  }
+
+  function formatAccessDayFull(iso) {
+    const s = String(iso || "").trim();
+    const m = s.match(/^(\d{4})-(\d{2})-(\d{2})/);
+    return m ? `${m[1]}-${m[2]}-${m[3]}` : s ? s.slice(0, 10) : "—";
+  }
+
+  function formatUsageGrade(grade) {
+    const g = String(grade || "").trim();
+    if (!g) return { short: "—", full: "—" };
+    if (/^kindergarten$/i.test(g)) return { short: "K", full: g };
+    const m = g.match(/^grade\s*(\d{1,2})$/i);
+    if (m) return { short: `G${m[1]}`, full: g };
+    return { short: g, full: g };
   }
 
   function formatAccessMins(mins) {
@@ -5822,15 +5846,26 @@ const App = (() => {
         return;
       }
       tbody.innerHTML = users
-        .map(
-          (u) => `<tr>
+        .map((u) => {
+          const grade = formatUsageGrade(u.grade_level);
+          return `<tr>
             <td class="usage-user">${escapeHtml(u.nickname || "Learner")}</td>
-            <td>${escapeHtml(u.grade_level || "—")}</td>
-            <td class="num">${escapeHtml(formatAccessMins(u.total_mins))}</td>
-            <td>${escapeHtml(formatAccessDay(u.first_access_at))}</td>
-            <td>${escapeHtml(formatAccessDay(u.last_access_at))}</td>
-          </tr>`
-        )
+            <td class="usage-grade"><span class="usage-g-short">${escapeHtml(
+              grade.short
+            )}</span><span class="usage-g-full">${escapeHtml(grade.full)}</span></td>
+            <td class="num usage-mins">${escapeHtml(formatAccessMins(u.total_mins))}</td>
+            <td class="usage-date"><span class="usage-d-short">${escapeHtml(
+              formatAccessDay(u.first_access_at)
+            )}</span><span class="usage-d-full">${escapeHtml(
+            formatAccessDayFull(u.first_access_at)
+          )}</span></td>
+            <td class="usage-date"><span class="usage-d-short">${escapeHtml(
+              formatAccessDay(u.last_access_at)
+            )}</span><span class="usage-d-full">${escapeHtml(
+            formatAccessDayFull(u.last_access_at)
+          )}</span></td>
+          </tr>`;
+        })
         .join("");
     } catch (e) {
       tbody.innerHTML = `<tr><td colspan="5" class="muted">${escapeHtml(
