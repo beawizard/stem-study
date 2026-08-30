@@ -1045,8 +1045,8 @@ input:focus, textarea:focus, select:focus {
 }
 .data-table tr:last-child td { border-bottom: 0; }
 .usage-card {
-  padding-left: 0.8rem;
-  padding-right: 0.8rem;
+  padding-left: 0.7rem;
+  padding-right: 0.7rem;
 }
 .usage-wrap {
   max-width: 100%;
@@ -1057,23 +1057,24 @@ input:focus, textarea:focus, select:focus {
 .usage-table {
   table-layout: fixed;
   width: 100%;
-  font-size: 0.75rem;
+  min-width: 0;
+  font-size: 0.72rem;
 }
-.usage-col-user { width: 30%; }
-.usage-col-grade { width: 13%; }
+.usage-col-user { width: 26%; }
+.usage-col-grade { width: 12%; }
 .usage-col-mins { width: 12%; }
 .usage-col-first,
-.usage-col-last { width: 22.5%; }
+.usage-col-last { width: 25%; }
 .usage-table th,
 .usage-table td {
-  padding: 0.38rem 0.22rem;
+  padding: 0.34rem 0.16rem;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
 }
 .usage-table thead th {
-  font-size: 0.68rem;
-  letter-spacing: 0.02em;
+  font-size: 0.64rem;
+  letter-spacing: 0.01em;
 }
 .usage-table .usage-mins {
   text-align: right;
@@ -1242,6 +1243,18 @@ body.admin-mode .data-table {
 body.admin-mode .table-wrap {
   overflow-x: auto;
   -webkit-overflow-scrolling: touch;
+}
+body.admin-mode .usage-table {
+  table-layout: fixed;
+  min-width: 0;
+  width: 100%;
+}
+body.admin-mode .usage-table th:last-child,
+body.admin-mode .usage-table td:last-child {
+  width: auto;
+}
+body.admin-mode .usage-wrap.table-wrap {
+  overflow-x: hidden;
 }
 .inline-input {
   width: 100%;
