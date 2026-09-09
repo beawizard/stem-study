@@ -406,6 +406,12 @@ const App = (() => {
     return `
       <div class="table-wrap exam-mistakes-wrap">
         <table class="data-table exam-mistakes-table">
+          <colgroup>
+            <col class="exam-col-q" />
+            <col class="exam-col-you" />
+            <col class="exam-col-key" />
+            <col class="exam-col-deduct" />
+          </colgroup>
           <thead>
             <tr>
               <th>Q</th>

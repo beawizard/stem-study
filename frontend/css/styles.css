@@ -826,17 +826,34 @@ input:focus, textarea:focus, select:focus {
   margin: 0.55rem 0 0.9rem;
   text-align: left;
   max-height: 11rem;
-  overflow: auto;
+  overflow-x: hidden;
+  overflow-y: auto;
 }
 .exam-mistakes-table {
   table-layout: fixed;
   width: 100%;
-  font-size: 0.8rem;
+  min-width: 0;
+  font-size: 0.78rem;
 }
+.exam-col-q,
+.exam-col-you,
+.exam-col-key { width: 23%; }
+.exam-col-deduct { width: 31%; }
 .exam-mistakes-table th,
 .exam-mistakes-table td {
-  padding: 0.32rem 0.28rem;
+  padding: 0.32rem 0.2rem;
   white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.exam-mistakes-table thead th {
+  letter-spacing: 0;
+  font-size: 0.68rem;
+}
+.exam-mistakes-table th:last-child,
+.exam-mistakes-table td:last-child {
+  width: auto;
+  text-align: right;
 }
 .exam-mistakes-table td.muted {
   white-space: normal;
