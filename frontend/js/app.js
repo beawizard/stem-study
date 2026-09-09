@@ -414,6 +414,28 @@ const App = (() => {
     document.documentElement.style.setProperty("--vv-keyboard", "0px");
   }
 
+  function isDocxBuffer(buf) {
+    const b = new Uint8Array(buf);
+    return b.length >= 4 && b[0] === 0x50 && b[1] === 0x4b && b[2] === 0x03 && b[3] === 0x04;
+  }
+
+  function isDocxFile(file) {
+    const name = String((file && file.name) || "").toLowerCase();
+    const type = String((file && file.type) || "").toLowerCase();
+    if (name.endsWith(".docx")) return true;
+    if (type.includes("wordprocessingml") || type.includes("officedocument")) return true;
+    return false;
+  }
+
+  async function packQuestionFile(file) {
+    const buf = await file.arrayBuffer();
+    if (isDocxFile(file) || isDocxBuffer(buf)) {
+      return { kind: "docx", docxB64: bytesToBase64(buf) };
+    }
+    const text = new TextDecoder("utf-8").decode(buf);
+    return { kind: "text", text };
+  }
+
   function bytesToBase64(buf) {
     const bytes = new Uint8Array(buf);
     let bin = "";
@@ -1936,7 +1958,10 @@ const App = (() => {
             </div>
             <button class="btn" type="button"
               data-start="${escapeHtml(selected.subject_id)}"
-              data-level="${escapeHtml(lv.level_id)}">Start</button>
+              data-level="${escapeHtml(lv.level_id)}"
+              ${(lv.question_count || 0) ? "" : "disabled title=\"Import questions in Admin first\""}>${
+                (lv.question_count || 0) ? "Start" : "No questions"
+              }</button>
           </div>`;
         })
         .join("");
@@ -4391,7 +4416,10 @@ const App = (() => {
             </div>
             <button class="btn" type="button"
               data-start="${escapeHtml(selected.subject_id)}"
-              data-level="${escapeHtml(lv.level_id)}">Start</button>
+              data-level="${escapeHtml(lv.level_id)}"
+              ${(lv.question_count || 0) ? "" : "disabled title=\"Import questions in Admin first\""}>${
+                (lv.question_count || 0) ? "Start" : "No questions"
+              }</button>
           </div>`;
         })
         .join("");
@@ -6458,26 +6486,20 @@ const App = (() => {
       csvFile.onchange = async () => {
         const file = csvFile.files && csvFile.files[0];
         if (!file) return;
-        const name = String(file.name || "").toLowerCase();
-        if (name.endsWith(".docx")) {
-          try {
-            const buf = await file.arrayBuffer();
-            state.pendingDocxB64 = bytesToBase64(buf);
+        try {
+          const packed = await packQuestionFile(file);
+          if (packed.kind === "docx") {
+            state.pendingDocxB64 = packed.docxB64;
             if (csvText) csvText.value = "";
             toast(`Loaded Vedic paper ${file.name} (${Math.round(file.size / 1024)} KB)`);
-          } catch {
+          } else {
             state.pendingDocxB64 = null;
-            toast("Could not read the .docx file.", true);
+            if (csvText) csvText.value = packed.text || "";
+            toast(`Loaded ${file.name} into the CSV box`);
           }
-          return;
-        }
-        state.pendingDocxB64 = null;
-        if (!csvText) return;
-        try {
-          csvText.value = await file.text();
-          toast(`Loaded ${file.name} into the CSV box`);
-        } catch {
-          toast("Could not read CSV file.", true);
+        } catch (err) {
+          state.pendingDocxB64 = null;
+          toast((err && err.message) || "Could not read that file.", true);
         }
       };
     }
@@ -6496,8 +6518,24 @@ const App = (() => {
           toast("Select a working level for CSV import (or import Excel to create levels).", true);
           return;
         }
-        const text = (csvText && csvText.value) || "";
-        const docxB64 = state.pendingDocxB64 || "";
+        let text = (csvText && csvText.value) || "";
+        let docxB64 = state.pendingDocxB64 || "";
+        const liveFile = csvFile && csvFile.files && csvFile.files[0];
+        if (liveFile) {
+          try {
+            const packed = await packQuestionFile(liveFile);
+            if (packed.kind === "docx") {
+              docxB64 = packed.docxB64;
+              text = "";
+            } else if (packed.text && packed.text.trim()) {
+              docxB64 = "";
+              text = packed.text;
+            }
+          } catch (err) {
+            toast((err && err.message) || "Could not read the selected file.", true);
+            return;
+          }
+        }
         if (!docxB64 && !text.trim()) {
           toast("Paste CSV, choose a CSV file, or upload a Vedic .docx first.", true);
           return;
@@ -6542,6 +6580,7 @@ const App = (() => {
           if (rep) rep.checked = false;
           state.adminSubjectId = subjectId;
           state.adminLevelId = levelId;
+          StudyCache.invalidateAll();
           render();
         } catch (err) {
           toast(err.message || String(err), true);
