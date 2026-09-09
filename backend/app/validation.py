@@ -16,6 +16,26 @@ MAX_LEVEL_ID_LEN = 64
 MAX_CSV_ROWS = 5000
 ID_PATTERN = re.compile(r"^[a-zA-Z0-9_-]{1,64}$")
 SUBJECT_ID_PATTERN = re.compile(r"^[a-z][a-z0-9_-]{0,62}$")
+# "Level 4" / "Set 4" / "lvl-4" → "4" (matches existing Vedic numeric ids).
+_LEVEL_NUM_NAME = re.compile(r"^(?:level|set|lvl)[\s._-]+(\d+)$", re.IGNORECASE)
+
+
+def normalize_level_id(value: str) -> str:
+    """Accept human names like 'Level 4'; store a URL-safe id (no spaces)."""
+    raw = (value or "").strip()
+    if not raw:
+        raise ValueError("level_id is required")
+    numbered = _LEVEL_NUM_NAME.match(raw)
+    if numbered:
+        return numbered.group(1)
+    slug = re.sub(r"[^a-zA-Z0-9_-]+", "-", raw)
+    slug = re.sub(r"-{2,}", "-", slug).strip("-_")
+    if not slug or not ID_PATTERN.match(slug):
+        raise ValueError(
+            'level_id must be letters, numbers, hyphen, or underscore '
+            '(no spaces). Use "4" or "level-4", not "Level 4".'
+        )
+    return slug[:MAX_LEVEL_ID_LEN]
 
 # STEM subject categories (admin Content creation)
 STEM_CATEGORIES = ("Science", "Technology", "Engineering", "Mathematics")
@@ -399,12 +419,10 @@ class LevelCreate(BaseModel):
     pass_accuracy: float = Field(default=0.8, ge=0.0, le=1.0)
     min_questions: int = Field(default=5, ge=1, le=500)
 
-    @field_validator("level_id")
+    @field_validator("level_id", mode="before")
     @classmethod
     def validate_level_id(cls, v: str) -> str:
-        if not ID_PATTERN.match(v):
-            raise ValueError("Invalid level_id format")
-        return v
+        return normalize_level_id("" if v is None else str(v))
 
 
 class LevelUpdate(BaseModel):

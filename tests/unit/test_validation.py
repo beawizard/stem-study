@@ -57,6 +57,16 @@ def test_level_create_bounds():
         LevelCreate(level_id="l1", name="One", order=1, pass_accuracy=1.5)
 
 
+def test_level_id_slugifies_human_names():
+    assert LevelCreate(level_id="Level 4", name="Set 4", order=4).level_id == "4"
+    assert LevelCreate(level_id="Set 4", name="Set 4", order=4).level_id == "4"
+    assert LevelCreate(level_id="level-4", name="Set 4", order=4).level_id == "4"
+    assert LevelCreate(level_id="l4", name="L4", order=4).level_id == "l4"
+    assert LevelCreate(level_id="set1", name="Paper B set 1", order=1).level_id == "set1"
+    with pytest.raises(Exception):
+        LevelCreate(level_id="***", name="Bad", order=1)
+
+
 def test_answer_submit():
     a = AnswerSubmit(question_id="abc", answer="3", elapsed_ms=1200)
     assert a.elapsed_ms == 1200

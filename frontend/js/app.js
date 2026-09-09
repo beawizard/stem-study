@@ -3407,7 +3407,7 @@ const App = (() => {
           <div class="row">
             <div class="grow">
               <label for="lvl-id">Level ID</label>
-              <input id="lvl-id" required pattern="[a-zA-Z0-9_-]{1,64}" placeholder="e.g. l4" maxlength="64" />
+              <input id="lvl-id" required maxlength="64" placeholder="e.g. 4" title="Letters, numbers, hyphen. “Level 4” or “Set 4” is stored as 4." />
             </div>
             <div class="grow">
               <label for="lvl-name">Name</label>
@@ -5930,19 +5930,63 @@ const App = (() => {
     return (sel && sel.value) || state.adminLevelId || null;
   }
 
-  function levelIdFromVedicFilename(fileName) {
+  function vedicSetNumberFromFilename(fileName) {
     const m = String(fileName || "").match(/set\s*[-_ ]?(\d+)/i);
-    if (!m) return null;
-    const n = m[1];
+    return m ? m[1] : null;
+  }
+
+  function levelIdFromVedicFilename(fileName) {
+    const n = vedicSetNumberFromFilename(fileName);
+    if (!n) return null;
     const sel = document.getElementById("admin-level-select");
     const opts = sel
       ? Array.from(sel.options).filter((o) => o.value)
       : [];
-    const byId = opts.find((o) => o.value === n);
-    if (byId) return byId.value;
+    // Prefer "Set N" in the label: ids 1/2 on this topic are swapped vs set numbers.
     const re = new RegExp(`(?:^|\\b)set\\s*${n}\\b`, "i");
     const byName = opts.find((o) => re.test(o.textContent || ""));
-    return byName ? byName.value : n;
+    if (byName) return byName.value;
+    const byId = opts.find((o) => o.value === n);
+    if (byId) return byId.value;
+    return n;
+  }
+
+  function currentAdminSubjectLooksVedic() {
+    const sel = document.getElementById("admin-subject-select");
+    const t =
+      (sel &&
+        sel.selectedOptions &&
+        sel.selectedOptions[0] &&
+        sel.selectedOptions[0].textContent) ||
+      "";
+    return /vedic|paper\s*b/i.test(t);
+  }
+
+  function suggestedVedicLevelName(setNo) {
+    const sel = document.getElementById("admin-level-select");
+    const opts = sel
+      ? Array.from(sel.options).filter((o) => o.value)
+      : [];
+    for (const o of opts) {
+      const text = (o.textContent || "").split("·")[0].trim();
+      if (/set\s+\d+/i.test(text)) {
+        return text.replace(/set\s+\d+/i, `Set ${setNo}`).slice(0, 100);
+      }
+    }
+    return `Set ${setNo}`;
+  }
+
+  function nextAdminLevelOrder(fallback) {
+    const sel = document.getElementById("admin-level-select");
+    let max = 0;
+    if (sel) {
+      for (const o of sel.options) {
+        const m = (o.textContent || "").match(/·\s*order\s+(\d+)/i);
+        if (m) max = Math.max(max, Number(m[1]) || 0);
+      }
+    }
+    const fb = Number(fallback);
+    return Math.max(max + 1, Number.isFinite(fb) && fb > 0 ? fb : 1);
   }
 
   function levelOptionHasQuestions(levelId) {
@@ -6545,15 +6589,29 @@ const App = (() => {
           return;
         }
         try {
+          const rawId = document.getElementById("lvl-id").value.trim();
+          const levelId = slugifyLevelId(rawId);
+          if (!/^[a-zA-Z0-9_-]{1,64}$/.test(levelId)) {
+            toast(
+              'Level ID cannot contain spaces. Use "4" for Set 4 (not "Level 4").',
+              true
+            );
+            return;
+          }
+          document.getElementById("lvl-id").value = levelId;
           const created = await Api.createLevel(token(), subjectId, {
-            level_id: document.getElementById("lvl-id").value.trim(),
+            level_id: levelId,
             name: document.getElementById("lvl-name").value.trim(),
             description: document.getElementById("lvl-desc").value.trim(),
             order: parseInt(document.getElementById("lvl-order").value, 10),
             pass_accuracy: parseFloat(document.getElementById("lvl-pass").value),
             min_questions: parseInt(document.getElementById("lvl-minq").value, 10),
           });
-          toast(`Level "${created.level_id}" created`);
+          toast(
+            levelId !== rawId
+              ? `Level "${created.level_id}" created (from "${rawId}")`
+              : `Level "${created.level_id}" created`
+          );
           state.adminSubjectId = subjectId;
           state.adminLevelId = created.level_id;
           render();
@@ -6584,12 +6642,39 @@ const App = (() => {
         return false;
       }
       const sel = document.getElementById("admin-level-select");
-      const knownLevel =
+      let knownLevel =
         sel &&
         Array.from(sel.options).some((o) => o.value && o.value === String(levelId));
+      if (!knownLevel && docxB64 && currentAdminSubjectLooksVedic()) {
+        const setNo = vedicSetNumberFromFilename(fileName) || String(levelId);
+        try {
+          const order = nextAdminLevelOrder(setNo);
+          const setName = suggestedVedicLevelName(setNo);
+          toast(`Creating Set ${setNo}…`);
+          await ensureLevelForImport(subjectId, setNo, setName, order, {
+            pass_accuracy: 0.6,
+            min_questions: 40,
+          });
+          levelId = setNo;
+          knownLevel = true;
+          if (sel && !Array.from(sel.options).some((o) => o.value === setNo)) {
+            const opt = document.createElement("option");
+            opt.value = setNo;
+            opt.textContent = `${setName} · order ${order} · 0 Q`;
+            sel.appendChild(opt);
+          }
+        } catch (err) {
+          toast(
+            (err && err.message) ||
+              `Could not create Set ${setNo}. Add the level first, then upload.`,
+            true
+          );
+          return false;
+        }
+      }
       if (!knownLevel) {
         toast(
-          `No level "${levelId}" on this topic. Select Vedic Paper B, then upload again.`,
+          `No level "${levelId}" on this topic. Add it first (ID ${levelId}, no spaces), then upload again.`,
           true
         );
         return false;
@@ -7554,8 +7639,10 @@ const App = (() => {
 
   /** Map Excel sheet / display name to a valid level_id. */
   function slugifyLevelId(name) {
-    let s = String(name || "")
-      .trim()
+    const raw = String(name || "").trim();
+    const numbered = raw.match(/^(?:level|set|lvl)[\s._-]+(\d+)$/i);
+    if (numbered) return numbered[1];
+    let s = raw
       .replace(/\s+/g, "-")
       .replace(/[^a-zA-Z0-9_-]/g, "-")
       .replace(/-+/g, "-")
@@ -7601,15 +7688,15 @@ const App = (() => {
     return lines.join("\n");
   }
 
-  async function ensureLevelForImport(subjectId, levelId, levelName, order) {
+  async function ensureLevelForImport(subjectId, levelId, levelName, order, extras = {}) {
     try {
       await Api.createLevel(token(), subjectId, {
         level_id: levelId,
         name: String(levelName).slice(0, 100),
         description: "",
         order,
-        pass_accuracy: 0.8,
-        min_questions: 5,
+        pass_accuracy: extras.pass_accuracy ?? 0.8,
+        min_questions: extras.min_questions ?? 5,
       });
       return { created: true };
     } catch (e) {
