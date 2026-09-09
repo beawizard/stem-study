@@ -3514,7 +3514,7 @@ const App = (() => {
           <p class="muted">
             Import into the <strong>working level</strong> below. Arithmetic CSV:
             <code>1,+,2,=,3</code> or <code>1+2,3</code>.
-            Vedic contest papers: upload the official <code>.docx</code> (40 MCQ, A–E, <code>[ans=B]</code>).
+            Vedic contest papers: choose the official <code>.docx</code> (e.g. set3.docx) — it imports immediately into the matching set (or the working level).
             Scoring follows PNVMO / IVMO (Q1–25: 2 marks; Q26–35: 3/−1; Q36–40: 4/−2; max 100).
           </p>
           <div class="row">
@@ -3536,7 +3536,7 @@ const App = (() => {
               <input type="checkbox" id="csv-replace" />
               Replace existing questions on this level (clear set before import)
             </label>
-            <button class="btn accent" type="submit" id="admin-csv-submit">Import CSV</button>
+            <button class="btn accent" type="submit" id="admin-csv-submit">Import questions</button>
           </form>
         </div>
 
@@ -5930,6 +5930,30 @@ const App = (() => {
     return (sel && sel.value) || state.adminLevelId || null;
   }
 
+  function levelIdFromVedicFilename(fileName) {
+    const m = String(fileName || "").match(/set\s*[-_ ]?(\d+)/i);
+    if (!m) return null;
+    const n = m[1];
+    const sel = document.getElementById("admin-level-select");
+    const opts = sel
+      ? Array.from(sel.options).filter((o) => o.value)
+      : [];
+    const byId = opts.find((o) => o.value === n);
+    if (byId) return byId.value;
+    const re = new RegExp(`(?:^|\\b)set\\s*${n}\\b`, "i");
+    const byName = opts.find((o) => re.test(o.textContent || ""));
+    return byName ? byName.value : n;
+  }
+
+  function levelOptionHasQuestions(levelId) {
+    const sel = document.getElementById("admin-level-select");
+    if (!sel) return false;
+    const opt = Array.from(sel.options).find((o) => o.value === String(levelId));
+    const label = (opt && opt.textContent) || "";
+    const m = label.match(/·\s*(\d+)\s*Q/i);
+    return m ? Number(m[1]) > 0 : false;
+  }
+
   /** Two-step confirm on a button (avoids blocked window.confirm). Supports icon buttons. */
   function armDangerButton(btn, armedLabel) {
     if (btn.dataset.armed === "1") return true;
@@ -6541,16 +6565,114 @@ const App = (() => {
 
     const csvFile = document.getElementById("csv-file");
     const csvText = document.getElementById("csv-text");
+
+    async function runAdminQuestionImport({
+      docxB64 = "",
+      text = "",
+      fileName = "",
+      auto = false,
+    } = {}) {
+      const subjectId = currentAdminSubjectId();
+      if (!subjectId) {
+        toast("Select a subject first.", true);
+        return false;
+      }
+      let levelId =
+        (docxB64 && levelIdFromVedicFilename(fileName)) || currentAdminLevelId();
+      if (!levelId) {
+        toast("Select a working level (or name the file set3.docx to match Set 3).", true);
+        return false;
+      }
+      const sel = document.getElementById("admin-level-select");
+      const knownLevel =
+        sel &&
+        Array.from(sel.options).some((o) => o.value && o.value === String(levelId));
+      if (!knownLevel) {
+        toast(
+          `No level "${levelId}" on this topic. Select Vedic Paper B, then upload again.`,
+          true
+        );
+        return false;
+      }
+      if (sel && levelId) sel.value = levelId;
+      if (!docxB64 && !String(text || "").trim()) {
+        toast("Paste CSV, choose a CSV file, or upload a Vedic .docx first.", true);
+        return false;
+      }
+      const replaceBox = document.getElementById("csv-replace");
+      const hasQs = levelOptionHasQuestions(levelId);
+      let replace = Boolean(replaceBox && replaceBox.checked);
+      if (auto && docxB64 && !hasQs) replace = true;
+      const submitBtn = document.getElementById("admin-csv-submit");
+      if (replace && hasQs && !auto) {
+        if (submitBtn && !armDangerButton(submitBtn, "Confirm replace?")) {
+          return false;
+        }
+      }
+      if (submitBtn) submitBtn.disabled = true;
+      try {
+        const summary = docxB64
+          ? await Api.uploadQuestionsDocx(
+              token(),
+              subjectId,
+              levelId,
+              docxB64,
+              replace
+            )
+          : await Api.uploadQuestionsCsv(
+              token(),
+              subjectId,
+              levelId,
+              text,
+              replace
+            );
+        const imported = Number(summary.imported) || 0;
+        if (!imported) {
+          throw new Error("Import finished but loaded 0 questions. Check the file and working level.");
+        }
+        const kind = summary.exam_kind === "vedic" ? "Vedic paper" : "CSV";
+        toast(
+          `${kind}: imported ${imported} questions into ${levelId}` +
+            ` · total ${summary.question_count}`
+        );
+        state.pendingDocxB64 = null;
+        if (csvFile) csvFile.value = "";
+        if (csvText) csvText.value = "";
+        if (replaceBox) replaceBox.checked = false;
+        state.adminSubjectId = subjectId;
+        state.adminLevelId = levelId;
+        StudyCache.invalidateAll();
+        render();
+        return true;
+      } catch (err) {
+        toast(err.message || String(err), true);
+        if (submitBtn) {
+          submitBtn.disabled = false;
+          submitBtn.dataset.armed = "0";
+          submitBtn.textContent =
+            submitBtn.dataset.originalLabel || "Import questions";
+          submitBtn.classList.remove("danger-armed");
+        }
+        return false;
+      }
+    }
+
     if (csvFile) {
       csvFile.onchange = async () => {
         const file = csvFile.files && csvFile.files[0];
         if (!file) return;
+        csvFile.disabled = true;
         try {
           const packed = await packQuestionFile(file);
           if (packed.kind === "docx") {
             state.pendingDocxB64 = packed.docxB64;
             if (csvText) csvText.value = "";
-            toast(`Loaded Vedic paper ${file.name} (${Math.round(file.size / 1024)} KB)`);
+            toast(`Importing ${file.name}…`);
+            await runAdminQuestionImport({
+              docxB64: packed.docxB64,
+              fileName: file.name,
+              auto: true,
+            });
           } else {
             state.pendingDocxB64 = null;
             if (csvText) csvText.value = packed.text || "";
@@ -6559,6 +6681,8 @@ const App = (() => {
         } catch (err) {
           state.pendingDocxB64 = null;
           toast((err && err.message) || "Could not read that file.", true);
+        } finally {
+          if (csvFile) csvFile.disabled = false;
         }
       };
     }
@@ -6567,22 +6691,14 @@ const App = (() => {
     if (csvForm) {
       csvForm.onsubmit = async (e) => {
         e.preventDefault();
-        const subjectId = currentAdminSubjectId();
-        const levelId = currentAdminLevelId();
-        if (!subjectId) {
-          toast("Select a subject first.", true);
-          return;
-        }
-        if (!levelId) {
-          toast("Select a working level for CSV import (or import Excel to create levels).", true);
-          return;
-        }
         let text = (csvText && csvText.value) || "";
         let docxB64 = state.pendingDocxB64 || "";
+        let fileName = "";
         const liveFile = csvFile && csvFile.files && csvFile.files[0];
         if (liveFile) {
           try {
             const packed = await packQuestionFile(liveFile);
+            fileName = liveFile.name || "";
             if (packed.kind === "docx") {
               docxB64 = packed.docxB64;
               text = "";
@@ -6595,61 +6711,7 @@ const App = (() => {
             return;
           }
         }
-        if (!docxB64 && !text.trim()) {
-          toast("Paste CSV, choose a CSV file, or upload a Vedic .docx first.", true);
-          return;
-        }
-        const replace = Boolean(
-          document.getElementById("csv-replace") &&
-            document.getElementById("csv-replace").checked
-        );
-        const submitBtn = document.getElementById("admin-csv-submit");
-        if (replace) {
-          if (submitBtn && !armDangerButton(submitBtn, "Confirm replace CSV?")) {
-            return;
-          }
-        }
-        if (submitBtn) submitBtn.disabled = true;
-        try {
-          const summary = docxB64
-            ? await Api.uploadQuestionsDocx(
-                token(),
-                subjectId,
-                levelId,
-                docxB64,
-                replace
-              )
-            : await Api.uploadQuestionsCsv(
-                token(),
-                subjectId,
-                levelId,
-                text,
-                replace
-              );
-          const kind = summary.exam_kind === "vedic" ? "Vedic paper" : "CSV";
-          toast(
-            `${kind}: imported ${summary.imported} questions into level ${levelId}` +
-              (replace ? ` (replaced; cleared ${summary.cleared || 0})` : "") +
-              ` · total ${summary.question_count}`
-          );
-          state.pendingDocxB64 = null;
-          if (csvFile) csvFile.value = "";
-          if (csvText) csvText.value = "";
-          const rep = document.getElementById("csv-replace");
-          if (rep) rep.checked = false;
-          state.adminSubjectId = subjectId;
-          state.adminLevelId = levelId;
-          StudyCache.invalidateAll();
-          render();
-        } catch (err) {
-          toast(err.message || String(err), true);
-          if (submitBtn) {
-            submitBtn.disabled = false;
-            submitBtn.dataset.armed = "0";
-            submitBtn.textContent = submitBtn.dataset.originalLabel || "Import CSV";
-            submitBtn.classList.remove("danger-armed");
-          }
-        }
+        await runAdminQuestionImport({ docxB64, text, fileName, auto: false });
       };
     }
 
