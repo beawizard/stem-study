@@ -817,6 +817,61 @@ input:focus, textarea:focus, select:focus {
   margin: 0 0 0.75rem;
   font-size: 0.9rem;
 }
+.exam-results-card {
+  width: min(24rem, 100%);
+  text-align: center;
+}
+.exam-score-line {
+  margin: 0.35rem 0 0.85rem;
+  font-size: 2.1rem;
+  font-weight: 800;
+  color: var(--brand-dark);
+  line-height: 1.1;
+}
+.exam-results-stats {
+  justify-content: center;
+  margin-bottom: 0.75rem;
+}
+.mcq-choices {
+  display: flex;
+  flex-direction: column;
+  gap: 0.45rem;
+}
+.mcq-choice {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.55rem;
+  width: 100%;
+  text-align: left;
+  border: 2px solid #99f6e4;
+  background: #fff;
+  border-radius: 12px;
+  padding: 0.55rem 0.7rem;
+  min-height: 2.6rem;
+  color: var(--ink);
+  font-weight: 600;
+}
+.mcq-choice.is-selected {
+  border-color: var(--brand);
+  background: #ecfdf5;
+  box-shadow: 0 0 0 2px rgba(15, 118, 110, 0.18);
+}
+.mcq-key {
+  flex: 0 0 1.5rem;
+  font-weight: 800;
+  color: var(--brand-dark);
+}
+.mcq-text {
+  flex: 1 1 auto;
+  min-width: 0;
+  font-weight: 600;
+  line-height: 1.35;
+}
+.study-vedic .study-prompt-xl {
+  font-size: 1.15rem;
+  line-height: 1.4;
+  text-align: left;
+}
 
 .badge {
   display: inline-block;

@@ -183,6 +183,16 @@ const Api = (() => {
           headers: { "Content-Type": "text/csv" },
         }
       ),
+    uploadQuestionsDocx: (token, subjectId, levelId, docxBase64, replace = false) =>
+      request(
+        `/subjects/${encodeURIComponent(subjectId)}/levels/${encodeURIComponent(levelId)}/questions` +
+          (replace ? "?replace=true" : ""),
+        {
+          method: "POST",
+          body: { docx_base64: docxBase64 },
+          token,
+        }
+      ),
     clearQuestions: (token, subjectId, levelId) =>
       request(
         `/subjects/${encodeURIComponent(subjectId)}/levels/${encodeURIComponent(levelId)}/questions`,

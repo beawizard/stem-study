@@ -436,7 +436,7 @@ class SessionAnswerItem(BaseModel):
     model_config = ConfigDict(str_strip_whitespace=True, extra="forbid")
 
     question_id: str = Field(..., min_length=1, max_length=64)
-    answer: str = Field(default="0", max_length=500)
+    answer: str = Field(default="", max_length=500)
 
 
 class SessionComplete(BaseModel):

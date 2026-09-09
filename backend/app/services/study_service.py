@@ -10,6 +10,7 @@ from typing import Any
 from app import db, keys
 from app.services import subject_service
 from app.services.insights_service import build_recommendation
+from app.vedic import MAX_SCORE as VEDIC_MAX_SCORE, score_vedic_item
 from app.validation import AnswerSubmit
 
 
@@ -383,6 +384,9 @@ def start_session(user_id: str, subject_id: str, level_id: str) -> dict[str, Any
         "session_id": session_id,
         "subject_id": subject_id,
         "level_id": level_id,
+        "level_name": level.get("name") or level_id,
+        "exam_kind": level.get("exam_kind") or "",
+        "time_limit_sec": int(level.get("time_limit_sec") or 0),
         "questions": questions,
         "started_at": now,
         "total_questions": len(questions),
@@ -426,23 +430,53 @@ def complete_session(
         if not qid:
             continue
         text = str(ans if ans is not None else "").strip()
-        given[qid] = text if text else "0"
+        given[qid] = text
 
     now = _utcnow_iso()
     correct_count = 0
     details: list[dict[str, Any]] = []
+    level = subject_service.get_level(session["subject_id"], session["level_id"])
+    exam_kind = str(level.get("exam_kind") or "")
+    is_vedic = exam_kind == "vedic"
+    vedic_marks = 0
+    blank_count = 0
+    wrong_count = 0
 
     for qid in qids:
-        user_ans = given.get(qid, "0")
+        raw_given = given.get(qid, "")
         question = subject_service.get_question(
             session["subject_id"],
             session["level_id"],
             qid,
         )
         expected = str(question["answer"]) if question else ""
-        correct = bool(question) and _normalize_answer(user_ans) == _normalize_answer(
-            expected
-        )
+        qtype = (question or {}).get("qtype") or "open"
+        if qtype == "mcq":
+            is_vedic = True
+        if is_vedic and qtype == "mcq":
+            user_ans = raw_given
+            scored = score_vedic_item(
+                item_no=int((question or {}).get("item_no") or 0),
+                expected=expected,
+                given=user_ans,
+                points=(question or {}).get("points"),
+                penalty=(question or {}).get("penalty"),
+            )
+            correct = bool(scored["correct"])
+            skipped = bool(scored["skipped"])
+            marks = int(scored["marks"])
+            vedic_marks += marks
+            if skipped:
+                blank_count += 1
+            elif not correct:
+                wrong_count += 1
+        else:
+            user_ans = raw_given if raw_given else "0"
+            correct = bool(question) and _normalize_answer(user_ans) == _normalize_answer(
+                expected
+            )
+            skipped = False
+            marks = 1 if correct else 0
         if correct:
             correct_count += 1
 
@@ -470,15 +504,19 @@ def complete_session(
                 "given_answer": user_ans,
                 "expected_answer": expected,
                 "correct": correct,
+                "skipped": skipped,
+                "marks": marks,
             }
         )
 
     total_q = len(qids)
     accuracy = correct_count / total_q if total_q else 0.0
-    level = subject_service.get_level(session["subject_id"], session["level_id"])
     pass_accuracy = float(level.get("pass_accuracy", 0.8))
     min_q = int(level.get("min_questions", 5))
-    passed = accuracy >= pass_accuracy and total_q >= min_q
+    if is_vedic:
+        passed = vedic_marks >= int(round(pass_accuracy * VEDIC_MAX_SCORE))
+    else:
+        passed = accuracy >= pass_accuracy and total_q >= min_q
     elapsed = max(0, int(total_elapsed_ms))
 
     session_updates = {
@@ -494,7 +532,9 @@ def complete_session(
     db.update_item(keys.user_pk(user_id), keys.session_sk(session_id), session_updates)
 
     progress_status = "completed" if passed else "failed"
-    speed_badge = speed_badge_for_elapsed_ms(elapsed) if passed else None
+    speed_badge = (
+        None if is_vedic else (speed_badge_for_elapsed_ms(elapsed) if passed else None)
+    )
     _upsert_progress(
         user_id,
         session["subject_id"],
@@ -537,13 +577,13 @@ def complete_session(
         user_id=user_id,
     )
 
-    return {
+    out = {
         "session_id": session_id,
         "subject_id": session["subject_id"],
         "level_id": session["level_id"],
         "session_complete": True,
         "total_questions": total_q,
-        "answered": total_q,
+        "answered": total_q - blank_count if is_vedic else total_q,
         "correct": correct_count,
         "accuracy": accuracy,
         "passed": passed,
@@ -553,6 +593,17 @@ def complete_session(
         "recommendation": recommendation,
         "details": details,
     }
+    if is_vedic:
+        out.update(
+            {
+                "exam_kind": "vedic",
+                "score": vedic_marks,
+                "max_score": VEDIC_MAX_SCORE,
+                "blank": blank_count,
+                "wrong": wrong_count,
+            }
+        )
+    return out
 
 
 def submit_answer(

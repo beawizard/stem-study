@@ -541,12 +541,16 @@ def _route(
                 return not_found("Subject or level not found")
         if method == "POST":
             require_admin(user)
-            # CSV as raw body or JSON {"csv": "..."}; ?replace=true clears first
-            csv_text = _extract_csv(body, event)
+            # CSV as raw body or JSON {"csv": "..."}; Vedic paper as {"docx_base64": "..."}.
             replace = (qs.get("replace") or "").lower() in ("1", "true", "yes")
             try:
-                summary = subject_service.import_questions_csv(
-                    subject_id, level_id, csv_text, replace=replace
+                docx_bytes, csv_text = _extract_question_payload(body, event)
+                summary = subject_service.import_questions(
+                    subject_id,
+                    level_id,
+                    text=csv_text,
+                    docx_bytes=docx_bytes,
+                    replace=replace,
                 )
                 return created(summary)
             except (SubjectNotFound, LevelNotFound):
@@ -805,6 +809,27 @@ def _body(event: dict[str, Any]) -> str | None:
     if event.get("isBase64Encoded"):
         return base64.b64decode(body).decode("utf-8")
     return body
+
+
+def _extract_question_payload(
+    body: str | None, event: dict[str, Any]
+) -> tuple[bytes | None, str | None]:
+    """Return (docx_bytes, csv_text) from JSON {docx_base64} / {csv} or raw CSV."""
+    import json
+
+    if body:
+        try:
+            data = json.loads(body)
+            if isinstance(data, dict):
+                b64 = data.get("docx_base64") or data.get("docx_b64")
+                if b64:
+                    try:
+                        return base64.b64decode(str(b64)), None
+                    except Exception as exc:
+                        raise ValueError("Invalid docx_base64") from exc
+        except json.JSONDecodeError:
+            pass
+    return None, _extract_csv(body, event)
 
 
 def _extract_csv(body: str | None, event: dict[str, Any]) -> str:

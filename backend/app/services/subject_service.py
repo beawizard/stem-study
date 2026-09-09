@@ -10,6 +10,12 @@ from typing import Any
 from botocore.exceptions import ClientError
 
 from app import db, keys
+from app.vedic import (
+    TIME_LIMIT_SEC as VEDIC_TIME_LIMIT_SEC,
+    extract_docx_paragraphs,
+    looks_like_vedic,
+    parse_vedic_mcq,
+)
 from app.validation import LevelCreate, STEM_CATEGORIES, SubjectCreate, parse_csv_questions
 
 
@@ -224,6 +230,8 @@ def create_level(subject_id: str, data: LevelCreate) -> dict[str, Any]:
         "order": data.order,
         "pass_accuracy": data.pass_accuracy,
         "min_questions": data.min_questions,
+        "exam_kind": "",
+        "time_limit_sec": 0,
         "question_count": 0,
         # Monotonic version bumped when questions are imported/updated/deleted
         "content_version": 0,
@@ -383,9 +391,22 @@ def import_questions_csv(
     *,
     replace: bool = False,
 ) -> dict[str, Any]:
-    """Import questions from CSV. Append by default; replace=True clears first."""
+    """Import questions from CSV (or Vedic MCQ text). Append by default."""
+    return import_questions(
+        subject_id, level_id, text=csv_text, replace=replace
+    )
+
+
+def import_questions(
+    subject_id: str,
+    level_id: str,
+    *,
+    text: str | None = None,
+    docx_bytes: bytes | None = None,
+    replace: bool = False,
+) -> dict[str, Any]:
+    """Import arithmetic CSV or a Vedic PNVMO/IVMO-style paper (.docx or text)."""
     level = get_level(subject_id, level_id)
-    # Prefer subject meta for tags; fall back to denormalized level fields
     try:
         subject = get_subject(subject_id)
         category = _subject_category(subject)
@@ -393,7 +414,20 @@ def import_questions_csv(
     except SubjectNotFound:
         category = level.get("category") or "Mathematics"
         topic = level.get("topic") or ""
-    parsed = parse_csv_questions(csv_text)
+
+    exam_kind = ""
+    parsed: list[dict[str, Any]]
+    if docx_bytes:
+        parsed = parse_vedic_mcq(extract_docx_paragraphs(docx_bytes))
+        exam_kind = "vedic"
+    elif text and looks_like_vedic(text):
+        parsed = parse_vedic_mcq(
+            [ln.strip() for ln in text.replace("\r\n", "\n").split("\n") if ln.strip()]
+        )
+        exam_kind = "vedic"
+    else:
+        parsed = parse_csv_questions(text or "")
+
     now = _utcnow_iso()
     pk = keys.subject_pk(subject_id)
     cleared = 0
@@ -403,53 +437,58 @@ def import_questions_csv(
     else:
         base_count = int(level.get("question_count") or 0)
 
-    # Preserve CSV/Excel row order via sort_order (and zero-padded SK prefix).
-    # Active questions already use sort_order 0..n-1 when imported after this change.
     next_order = 0 if replace else _max_question_sort_order(subject_id, level_id) + 1
 
     batch_items: list[dict[str, Any]] = []
     for i, row in enumerate(parsed):
         sort_order = next_order + i
-        # Zero-padded prefix keeps DynamoDB SK order aligned with import order;
-        # random suffix avoids collisions on re-import/append.
         qid = f"{sort_order:06d}{uuid.uuid4().hex[:6]}"
-        batch_items.append(
-            {
-                "PK": pk,
-                "SK": keys.question_sk(level_id, qid),
-                "entity_type": "QUESTION",
-                # Tag question to working subject (subject_id + category + topic)
-                "subject_id": subject_id,
-                "category": category,
-                "topic": topic,
-                "level_id": level_id,
-                "question_id": qid,
-                "prompt": row["prompt"],
-                "answer": row["answer"],
-                "sort_order": sort_order,
-                "created_at": now,
-                "updated_at": now,
-                "deleted_at": "",
-            }
-        )
+        item: dict[str, Any] = {
+            "PK": pk,
+            "SK": keys.question_sk(level_id, qid),
+            "entity_type": "QUESTION",
+            "subject_id": subject_id,
+            "category": category,
+            "topic": topic,
+            "level_id": level_id,
+            "question_id": qid,
+            "prompt": row["prompt"],
+            "answer": row["answer"],
+            "sort_order": sort_order,
+            "qtype": row.get("qtype") or "open",
+            "points": int(row.get("points") or 1),
+            "penalty": int(row.get("penalty") or 0),
+            "item_no": int(row.get("item_no") or (sort_order + 1)),
+            "created_at": now,
+            "updated_at": now,
+            "deleted_at": "",
+        }
+        if row.get("choices"):
+            item["choices"] = row["choices"]
+        batch_items.append(item)
     created = db.batch_put_items(batch_items)
 
     new_count = base_count + created
-    # After replace, clear_questions already bumped version once; still bump for the import
     try:
         ver = int(get_level(subject_id, level_id).get("content_version") or 0) + 1
     except (TypeError, ValueError):
         ver = 1
-    db.update_item(
-        pk,
-        keys.level_sk(level_id),
-        {
-            "question_count": new_count,
-            "updated_at": now,
-            "content_updated_at": now,
-            "content_version": ver,
-        },
-    )
+    level_updates: dict[str, Any] = {
+        "question_count": new_count,
+        "updated_at": now,
+        "content_updated_at": now,
+        "content_version": ver,
+    }
+    if exam_kind == "vedic":
+        level_updates["exam_kind"] = "vedic"
+        level_updates["time_limit_sec"] = VEDIC_TIME_LIMIT_SEC
+        level_updates["min_questions"] = max(
+            int(level.get("min_questions") or 1), min(created or 1, 40)
+        )
+        # Handbook: ~60/100 is medal-range on Primary; keep as pass bar.
+        if float(level.get("pass_accuracy") or 0) >= 0.8:
+            level_updates["pass_accuracy"] = 0.6
+    db.update_item(pk, keys.level_sk(level_id), level_updates)
     return {
         "subject_id": subject_id,
         "level_id": level_id,
@@ -457,6 +496,7 @@ def import_questions_csv(
         "cleared": cleared,
         "replaced": replace,
         "question_count": new_count,
+        "exam_kind": exam_kind or (level.get("exam_kind") or ""),
     }
 
 
@@ -597,6 +637,11 @@ def list_questions(
             "topic": topic,
             "subject_label": f"{category} - {topic}" if category and topic else None,
             "sort_order": i.get("sort_order"),
+            "qtype": i.get("qtype") or "open",
+            "choices": i.get("choices") or [],
+            "points": int(i.get("points") or 1),
+            "penalty": int(i.get("penalty") or 0),
+            "item_no": int(i.get("item_no") or 0),
         }
         if include_answers:
             q["answer"] = i.get("answer")
@@ -749,6 +794,8 @@ def _public_level(item: dict[str, Any]) -> dict[str, Any]:
         "order": item.get("order"),
         "pass_accuracy": float(item.get("pass_accuracy", 0.8)),
         "min_questions": int(item.get("min_questions", 5)),
+        "exam_kind": item.get("exam_kind") or "",
+        "time_limit_sec": int(item.get("time_limit_sec") or 0),
         "question_count": int(item.get("question_count") or 0),
         "content_version": int(item.get("content_version") or 0),
         "content_updated_at": item.get("content_updated_at") or item.get("updated_at"),

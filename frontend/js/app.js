@@ -55,6 +55,7 @@ const App = (() => {
     techPageIndex: 0,
     adminUsageCategory: null,
     adminUsageSubjectId: null,
+    pendingDocxB64: null,
   };
 
   /**
@@ -334,9 +335,68 @@ const App = (() => {
     paintStudyTimer();
   }
 
+  function isVedicSession(s) {
+    if (!s) return false;
+    if (s.exam_kind === "vedic") return true;
+    const q = (s.questions || [])[0];
+    return Boolean(q && q.qtype === "mcq");
+  }
+
   function paintStudyTimer() {
     const t = document.getElementById("study-timer");
-    if (t) t.textContent = `⏱ ${formatDuration(getStudyElapsedMs())}`;
+    if (!t) return;
+    const elapsed = getStudyElapsedMs();
+    const limitMs = Number(state.session && state.session.time_limit_sec) * 1000;
+    if (isVedicSession(state.session) && limitMs > 0) {
+      const left = Math.max(0, limitMs - elapsed);
+      t.textContent = `⏱ ${formatDuration(left)} left`;
+      if (
+        left <= 0 &&
+        state.studyPhase === "answering" &&
+        !state.studyTransitioning &&
+        !state._vedicAutoSubmit
+      ) {
+        state._vedicAutoSubmit = true;
+        const form = document.getElementById("answer-form");
+        if (form) {
+          form.dispatchEvent(new Event("submit", { cancelable: true, bubbles: true }));
+        }
+      }
+      return;
+    }
+    t.textContent = `⏱ ${formatDuration(elapsed)}`;
+  }
+
+  function showVedicResultsDialog(res) {
+    const existing = document.getElementById("exam-results-overlay");
+    if (existing) existing.remove();
+    const score = Number(res.score);
+    const max = Number(res.max_score) || 100;
+    const overlay = document.createElement("div");
+    overlay.id = "exam-results-overlay";
+    overlay.className = "modal-overlay";
+    overlay.innerHTML = `
+      <div class="modal-card exam-results-card" role="dialog" aria-labelledby="exam-results-title">
+        <h2 id="exam-results-title">Exam results</h2>
+        <p class="exam-score-line">${Number.isFinite(score) ? score : "—"} <span class="muted">/ ${max}</span></p>
+        <div class="results-stats exam-results-stats">
+          <div class="stat-pill"><span class="stat-label">Correct</span><span class="stat-value">${res.correct || 0}</span></div>
+          <div class="stat-pill"><span class="stat-label">Wrong</span><span class="stat-value">${res.wrong || 0}</span></div>
+          <div class="stat-pill"><span class="stat-label">Skipped</span><span class="stat-value">${res.blank || 0}</span></div>
+        </div>
+        <p class="muted">Official PNVMO / IVMO scoring: Q1–25 are 2 marks (no penalty), Q26–35 are 3 (−1 if wrong), Q36–40 are 4 (−2 if wrong). Blank is 0.</p>
+        <p class="muted">Time ${formatDuration(res.total_elapsed_ms || 0)}</p>
+        <button type="button" class="btn" id="exam-results-done">Done</button>
+      </div>`;
+    document.body.appendChild(overlay);
+    const done = overlay.querySelector("#exam-results-done");
+    if (done) {
+      done.onclick = () => {
+        overlay.remove();
+        resetStudyState();
+        render();
+      };
+    }
   }
 
   function resetStudyState() {
@@ -352,6 +412,16 @@ const App = (() => {
     state.studyTransitioning = false;
     setStudyModeUi(false);
     document.documentElement.style.setProperty("--vv-keyboard", "0px");
+  }
+
+  function bytesToBase64(buf) {
+    const bytes = new Uint8Array(buf);
+    let bin = "";
+    const chunk = 0x8000;
+    for (let i = 0; i < bytes.length; i += chunk) {
+      bin += String.fromCharCode.apply(null, bytes.subarray(i, i + chunk));
+    }
+    return btoa(bin);
   }
 
   function formatDuration(ms) {
@@ -1974,7 +2044,9 @@ const App = (() => {
 
     // Stable DOM shell: chrome + answer controls stay mounted; only question text swaps in-place.
     return `
-      <div class="card study-card ${inCountdown ? "study-countdown-active" : ""}" id="study-shell">
+      <div class="card study-card ${inCountdown ? "study-countdown-active" : ""} ${
+        isVedicSession(s) ? "study-vedic" : ""
+      }" id="study-shell">
         <div class="study-chrome" id="study-chrome">
           <div class="row study-meta">
             <span class="badge study-badge" id="study-badge">${Math.min(state.qIndex + 1, total)} / ${total}</span>
@@ -1984,7 +2056,7 @@ const App = (() => {
             <span class="muted grow study-level" style="text-align:right">${escapeHtml(
               s.is_assessment
                 ? "Assessment"
-                : s.level_id || ""
+                : s.level_name || s.level_id || ""
             )}</span>
           </div>
           <div class="progress-bar study-progress" style="margin:0.75rem 0">
@@ -2000,19 +2072,25 @@ const App = (() => {
             </div>
             <div class="study-question-wrap ${inCountdown ? "study-obscured" : ""}" id="study-question-wrap">
               <div class="prompt study-prompt-xl" id="prompt">${
-                q ? escapeHtml(q.prompt) + " = ?" : ""
+                q
+                  ? escapeHtml(q.prompt) + (isVedicSession(s) ? "" : " = ?")
+                  : ""
               }</div>
             </div>
           </div>
 
           <form id="answer-form" class="stack study-answer-form ${inCountdown ? "study-obscured" : ""}" autocomplete="off">
-            <label class="study-answer-label" for="answer">Your answer</label>
+            ${
+              isVedicSession(s)
+                ? `<div class="mcq-choices" id="mcq-choices">${mcqChoicesHtml(q, saved)}</div>
+            <input id="answer" type="hidden" value="${escapeAttr(saved || "")}" />`
+                : `<label class="study-answer-label" for="answer">Your answer</label>
             <input id="answer" class="study-answer-input" inputmode="decimal" autocomplete="off"
               enterkeyhint="${isLast ? "done" : "go"}"
               autocapitalize="off" autocorrect="off" spellcheck="false"
               placeholder="Type here" ${inCountdown ? "disabled" : ""}
-              value="${escapeAttr(saved || "")}" />
-            <!-- Next sits directly under the answer so it stays near the question + keyboard -->
+              value="${escapeAttr(saved || "")}" />`
+            }
             <div class="study-actions" id="study-actions">
               <button class="btn study-next-btn" type="submit" id="study-next-btn"
                 tabindex="-1" ${inCountdown ? "disabled" : ""}>
@@ -2020,15 +2098,40 @@ const App = (() => {
               </button>
             </div>
             <p class="muted study-hint" id="study-hint">
-              ${
-                isLast
-                  ? "Blank counts as 0. Tap Submit when ready."
-                  : "Blank counts as 0. Tap Next to continue."
-              }
+              ${vedicHintHtml(s, q, isLast)}
             </p>
           </form>
         </div>
       </div>`;
+  }
+
+  function vedicHintHtml(s, q, isLast) {
+    if (!isVedicSession(s)) {
+      return isLast
+        ? "Blank counts as 0. Tap Submit when ready."
+        : "Blank counts as 0. Tap Next to continue.";
+    }
+    const n = Number(q && q.item_no) || state.qIndex + 1;
+    const pen = n >= 36 ? "−2 if wrong" : n >= 26 ? "−1 if wrong" : "no penalty if wrong";
+    return isLast
+      ? `Skip is safer than a guess (${pen}). Tap Submit when ready.`
+      : `Skip if unsure (${pen}). Tap Next to continue.`;
+  }
+
+  function mcqChoicesHtml(q, saved) {
+    const choices = (q && q.choices) || [];
+    if (!choices.length) return "";
+    const sel = String(saved || "").toUpperCase();
+    return choices
+      .map((c) => {
+        const key = String(c.key || "").toUpperCase();
+        const on = key && key === sel ? " is-selected" : "";
+        return `<button type="button" class="mcq-choice${on}" data-mcq="${escapeAttr(key)}">
+          <span class="mcq-key">${escapeHtml(key)}</span>
+          <span class="mcq-text">${escapeHtml(c.text || "")}</span>
+        </button>`;
+      })
+      .join("");
   }
 
   /** Keep soft keyboard open without breaking Next/Submit taps.
@@ -2042,7 +2145,7 @@ const App = (() => {
     const input = document.getElementById("answer");
     const nextBtn = document.getElementById("study-next-btn");
     const answerForm = document.getElementById("answer-form");
-    if (!input || !nextBtn || !answerForm || nextBtn.dataset.kbHold === "1") return;
+    if (!input || input.type === "hidden" || !nextBtn || !answerForm || nextBtn.dataset.kbHold === "1") return;
     nextBtn.dataset.kbHold = "1";
 
     // Desktop / mouse: prevent focus steal; click still fires and submits the form
@@ -2085,7 +2188,7 @@ const App = (() => {
   /** Focus answer field and re-measure keyboard inset (idempotent). */
   function focusAnswerField() {
     const input = document.getElementById("answer");
-    if (!input || input.disabled) return;
+    if (!input || input.disabled || input.type === "hidden") return;
     try {
       input.focus({ preventScroll: true });
     } catch {
@@ -2135,39 +2238,40 @@ const App = (() => {
       prompt.classList.remove("q-swap-in");
       // force reflow for animation
       void prompt.offsetWidth;
-      prompt.textContent = `${q.prompt} = ?`;
+      prompt.textContent = isVedicSession(s)
+        ? String(q.prompt || "")
+        : `${q.prompt} = ?`;
       prompt.classList.add("q-swap-in");
     }
 
     const input = document.getElementById("answer");
     if (input) {
-      // Never disable the field during quiz — disabling dismisses the mobile keypad
-      input.disabled = false;
-      // Only rewrite value if it changed (avoids some Android keyboard resets)
       const nextVal = saved != null ? String(saved) : "";
       if (input.value !== nextVal) input.value = nextVal;
-      input.setAttribute("enterkeyhint", isLast ? "done" : "go");
+      if (input.type !== "hidden") {
+        input.disabled = false;
+        input.setAttribute("enterkeyhint", isLast ? "done" : "go");
+      }
     }
+    const mcq = document.getElementById("mcq-choices");
+    if (mcq) mcq.innerHTML = mcqChoicesHtml(q, saved);
 
     const btn = document.getElementById("study-next-btn");
     if (btn) {
       btn.textContent = isLast ? "Submit ✓" : "Next →";
-      // Keep enabled during question swap so focus/keyboard stay stable
       btn.disabled = false;
     }
 
     const hint = document.getElementById("study-hint");
     if (hint) {
-      hint.textContent = isLast
-        ? "Blank counts as 0. Tap Submit when ready."
-        : "Blank counts as 0. Tap Next to continue.";
+      hint.textContent = vedicHintHtml(s, q, isLast);
     }
 
     updateStudySubmitEnabled();
-    // Re-assert focus after DOM text updates (critical for iOS keyboard persistence)
-    focusAnswerField();
-    // Second tick: some WebViews drop the keypad on the first focus after a tap
-    window.requestAnimationFrame(() => focusAnswerField());
+    if (!isVedicSession(s)) {
+      focusAnswerField();
+      window.requestAnimationFrame(() => focusAnswerField());
+    }
   }
 
   /**
@@ -3322,10 +3426,12 @@ const App = (() => {
         </div>
 
         <div class="import-block" style="margin-top:1.25rem">
-          <h3>CSV (single level)</h3>
+          <h3>CSV or Vedic paper (single level)</h3>
           <p class="muted">
-            Import into the <strong>working level</strong> below. Formats:
-            <code>1,+,2,=,3</code> or <code>1+2,3</code> (one question per line).
+            Import into the <strong>working level</strong> below. Arithmetic CSV:
+            <code>1,+,2,=,3</code> or <code>1+2,3</code>.
+            Vedic contest papers: upload the official <code>.docx</code> (40 MCQ, A–E, <code>[ans=B]</code>).
+            Scoring follows PNVMO / IVMO (Q1–25: 2 marks; Q26–35: 3/−1; Q36–40: 4/−2; max 100).
           </p>
           <div class="row">
             <div class="grow">
@@ -3335,8 +3441,8 @@ const App = (() => {
           </div>
           <form id="admin-csv-form" class="stack" style="margin-top:0.75rem">
             <div>
-              <label for="csv-file">Upload CSV file</label>
-              <input id="csv-file" type="file" accept=".csv,text/csv,text/plain" />
+              <label for="csv-file">Upload CSV or Vedic .docx</label>
+              <input id="csv-file" type="file" accept=".csv,.docx,text/csv,text/plain,application/vnd.openxmlformats-officedocument.wordprocessingml.document" />
             </div>
             <div>
               <label for="csv-text">Or paste CSV</label>
@@ -6348,10 +6454,25 @@ const App = (() => {
 
     const csvFile = document.getElementById("csv-file");
     const csvText = document.getElementById("csv-text");
-    if (csvFile && csvText) {
+    if (csvFile) {
       csvFile.onchange = async () => {
         const file = csvFile.files && csvFile.files[0];
         if (!file) return;
+        const name = String(file.name || "").toLowerCase();
+        if (name.endsWith(".docx")) {
+          try {
+            const buf = await file.arrayBuffer();
+            state.pendingDocxB64 = bytesToBase64(buf);
+            if (csvText) csvText.value = "";
+            toast(`Loaded Vedic paper ${file.name} (${Math.round(file.size / 1024)} KB)`);
+          } catch {
+            state.pendingDocxB64 = null;
+            toast("Could not read the .docx file.", true);
+          }
+          return;
+        }
+        state.pendingDocxB64 = null;
+        if (!csvText) return;
         try {
           csvText.value = await file.text();
           toast(`Loaded ${file.name} into the CSV box`);
@@ -6376,8 +6497,9 @@ const App = (() => {
           return;
         }
         const text = (csvText && csvText.value) || "";
-        if (!text.trim()) {
-          toast("Paste CSV or choose a CSV file first.", true);
+        const docxB64 = state.pendingDocxB64 || "";
+        if (!docxB64 && !text.trim()) {
+          toast("Paste CSV, choose a CSV file, or upload a Vedic .docx first.", true);
           return;
         }
         const replace = Boolean(
@@ -6392,18 +6514,28 @@ const App = (() => {
         }
         if (submitBtn) submitBtn.disabled = true;
         try {
-          const summary = await Api.uploadQuestionsCsv(
-            token(),
-            subjectId,
-            levelId,
-            text,
-            replace
-          );
+          const summary = docxB64
+            ? await Api.uploadQuestionsDocx(
+                token(),
+                subjectId,
+                levelId,
+                docxB64,
+                replace
+              )
+            : await Api.uploadQuestionsCsv(
+                token(),
+                subjectId,
+                levelId,
+                text,
+                replace
+              );
+          const kind = summary.exam_kind === "vedic" ? "Vedic paper" : "CSV";
           toast(
-            `CSV: imported ${summary.imported} questions` +
+            `${kind}: imported ${summary.imported} questions` +
               (replace ? ` (replaced; cleared ${summary.cleared || 0})` : "") +
               ` · total ${summary.question_count}`
           );
+          state.pendingDocxB64 = null;
           if (csvFile) csvFile.value = "";
           if (csvText) csvText.value = "";
           const rep = document.getElementById("csv-replace");
@@ -6673,11 +6805,14 @@ const App = (() => {
       bindStudySessionControls();
     }
 
-    keepAnswerKeyboardOpen();
+    if (!isVedicSession(state.session)) {
+      keepAnswerKeyboardOpen();
+    }
     resumeStudyTimer();
-    // Open keypad once answering starts
-    window.setTimeout(() => focusAnswerField(), 30);
-    window.setTimeout(() => focusAnswerField(), 200);
+    if (!isVedicSession(state.session)) {
+      window.setTimeout(() => focusAnswerField(), 30);
+      window.setTimeout(() => focusAnswerField(), 200);
+    }
     updateStudySubmitEnabled();
   }
 
@@ -6688,9 +6823,9 @@ const App = (() => {
     const isLast = state.qIndex >= total - 1;
     const btn = document.getElementById("study-next-btn");
     if (!btn) return;
-    if (!isLast) {
+    if (!isLast || isVedicSession(s)) {
       btn.disabled = false;
-      btn.textContent = "Next →";
+      btn.textContent = isLast ? "Submit ✓" : "Next →";
       return;
     }
     const priorOk = (s.questions || []).slice(0, -1).every((q) =>
@@ -6723,7 +6858,20 @@ const App = (() => {
     answerForm.dataset.bound = "1";
 
     updateStudySubmitEnabled();
-    keepAnswerKeyboardOpen();
+    if (!isVedicSession(state.session)) {
+      keepAnswerKeyboardOpen();
+    }
+    answerForm.addEventListener("click", (ev) => {
+      const btn = ev.target && ev.target.closest && ev.target.closest("[data-mcq]");
+      if (!btn || !answerForm.contains(btn)) return;
+      ev.preventDefault();
+      const key = (btn.getAttribute("data-mcq") || "").toUpperCase();
+      const hidden = document.getElementById("answer");
+      if (hidden) hidden.value = key;
+      answerForm.querySelectorAll(".mcq-choice").forEach((el) => {
+        el.classList.toggle("is-selected", el.getAttribute("data-mcq") === key);
+      });
+    });
     input.addEventListener("input", () => updateStudySubmitEnabled());
     // If the OS blurs the field (e.g. after animation), reopen the keypad while answering
     input.addEventListener("blur", () => {
@@ -6748,10 +6896,11 @@ const App = (() => {
       if (!q) return;
 
       const isLast = state.qIndex >= questions.length - 1;
-      let raw = input.value.trim();
-      if (!raw) raw = "0";
+      const vedic = isVedicSession(state.session);
+      let raw = (input.value || "").trim();
+      if (!raw && !vedic) raw = "0";
 
-      if (isLast && nextBtn.disabled) {
+      if (isLast && nextBtn.disabled && !vedic) {
         toast("Answer the earlier questions first, then submit.", true);
         focusAnswerField();
         return;
@@ -6809,7 +6958,9 @@ const App = (() => {
         question_id: qq.question_id,
         answer: Object.prototype.hasOwnProperty.call(state.clientAnswers, qq.question_id)
           ? state.clientAnswers[qq.question_id]
-          : "0",
+          : vedic
+            ? ""
+            : "0",
       }));
 
       try {
@@ -6844,12 +6995,19 @@ const App = (() => {
           StudyCache.invalidateLanding();
           ProfileCache.invalidate();
           InsightsCache.invalidate();
+          if (res.exam_kind === "vedic") {
+            setStudyModeUi(false);
+            document.documentElement.style.setProperty("--vv-keyboard", "0px");
+            showVedicResultsDialog(state.studyResults);
+            return;
+          }
         }
         setStudyModeUi(false);
         document.documentElement.style.setProperty("--vv-keyboard", "0px");
         render();
       } catch (err) {
         toast(err.message || String(err), true);
+        state._vedicAutoSubmit = false;
         nextBtn.disabled = false;
         nextBtn.textContent = "Submit";
         // Resume timer after failed submit so learner can continue
@@ -6872,6 +7030,7 @@ const App = (() => {
     });
     state.session = session;
     state.studyPhase = "countdown";
+    state._vedicAutoSubmit = false;
     state.qIndex = 0;
     state.clientAnswers = {};
     state.timerAccumulatedMs = 0;
