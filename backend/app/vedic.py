@@ -13,12 +13,20 @@ W_P = f"{{{W_NS}}}p"
 W_T = f"{{{W_NS}}}t"
 
 _Q_HEAD = re.compile(
-    r"^(\d{1,3})\.\s+(.*?)(?:\s*\[(\d+)\s*pts?\])?\s*$",
+    r"^(\d{1,3})[.)]\s+(.*?)(?:\s*\[(\d+)\s*pts?\])?\s*$",
     re.IGNORECASE,
 )
-_CHOICE = re.compile(r"^([A-E])\s+(.+)$")
-_ANS = re.compile(r"^\[ans\s*=\s*([A-E])\]\s*$", re.IGNORECASE)
-_SKIP = re.compile(r"^questions\s+\d", re.IGNORECASE)
+_CHOICE = re.compile(r"^([A-E])[.)]?\s+(.+)$")
+_ANS = re.compile(r"\[ans\s*=\s*([A-E])\]", re.IGNORECASE)
+_SKIP = re.compile(
+    r"^(questions\s+\d|paper\s+[a-z]|set\s+\d|time allowed|quick letter|letter key|"
+    r"maximum\s+\d+|primary|beginners|11 years)",
+    re.IGNORECASE,
+)
+_ANSWER_KEY_LINE = re.compile(
+    r"^\d{1,3}[A-E](\s+\d{1,3}[A-E])+\s*$",
+    re.IGNORECASE,
+)
 
 # Official exam format (current PNVMO / IVMO style)
 # Q1–25: 2 marks, no penalty. Q26–35: 3 marks, −1 if wrong.
@@ -72,17 +80,21 @@ def parse_vedic_mcq(paragraphs: list[str]) -> list[dict[str, Any]]:
     items: list[dict[str, Any]] = []
     current: dict[str, Any] | None = None
 
-    def flush() -> None:
+    def flush(*, require: bool = False) -> None:
         nonlocal current
         if not current:
             return
         choices = current.get("choices") or []
         ans = str(current.get("answer") or "").strip().upper()
         keys = {c["key"] for c in choices}
+        # Header/preamble can look like "1. …"; drop stubs that are not real items.
         if len(choices) < 2 or ans not in keys:
-            raise ValueError(
-                f"Question {current.get('item_no')}: need A–E choices and [ans=letter]"
-            )
+            if require:
+                raise ValueError(
+                    f"Question {current.get('item_no')}: need A–E choices and [ans=letter]"
+                )
+            current = None
+            return
         pts, pen = official_points_penalty(int(current["item_no"]))
         tagged = current.get("tagged_points")
         if tagged:
@@ -95,11 +107,18 @@ def parse_vedic_mcq(paragraphs: list[str]) -> list[dict[str, Any]]:
 
     for raw in paragraphs:
         line = (raw or "").strip()
-        if not line or _SKIP.match(line):
+        if not line or _SKIP.match(line) or _ANSWER_KEY_LINE.match(line):
             continue
-        m_ans = _ANS.match(line)
+        m_ans = _ANS.search(line)
         if m_ans and current:
             current["answer"] = m_ans.group(1).upper()
+            # Stem may include [ans=X] on the same line as the last choice.
+            rest = _ANS.sub("", line).strip()
+            m_c = _CHOICE.match(rest)
+            if m_c:
+                current["choices"].append(
+                    {"key": m_c.group(1).upper(), "text": m_c.group(2).strip()}
+                )
             flush()
             continue
         m_q = _Q_HEAD.match(line)

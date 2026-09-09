@@ -6628,7 +6628,7 @@ const App = (() => {
               );
           const kind = summary.exam_kind === "vedic" ? "Vedic paper" : "CSV";
           toast(
-            `${kind}: imported ${summary.imported} questions` +
+            `${kind}: imported ${summary.imported} questions into level ${levelId}` +
               (replace ? ` (replaced; cleared ${summary.cleared || 0})` : "") +
               ` · total ${summary.question_count}`
           );

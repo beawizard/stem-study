@@ -14,12 +14,15 @@ from app.vedic import (
     score_vedic_item,
 )
 
-PAPER_B = (
-    Path(__file__).resolve().parents[2]
-    / "resources"
-    / "vedic"
-    / "Paper B - Primary  (11 years and under) - set1.docx"
-)
+_VEDIC_DIR = Path(__file__).resolve().parents[2] / "resources" / "vedic"
+PAPER_B = _VEDIC_DIR / "Paper B - Primary  (11 years and under) - set1.docx"
+PAPER_B_SETS = [
+    PAPER_B,
+    _VEDIC_DIR / "Paper B - Primary (11 years and under) - set2.docx",
+    _VEDIC_DIR / "Paper B - Primary (11 years and under) - set3.docx",
+    _VEDIC_DIR / "Paper B - Primary (11 years and under) - set4.docx",
+    _VEDIC_DIR / "Paper B - Primary (11 years and under) - set5.docx",
+]
 
 
 @pytest.mark.unit
@@ -42,6 +45,18 @@ def test_score_blank_wrong_correct():
     assert not wrong_mid["correct"] and wrong_mid["marks"] == -1
     wrong_hard = score_vedic_item(item_no=36, expected="D", given="A")
     assert wrong_hard["marks"] == -2
+
+
+@pytest.mark.unit
+def test_parse_all_paper_b_sets_despite_headers():
+    for path in PAPER_B_SETS:
+        assert path.exists(), path
+        items = parse_vedic_mcq(extract_docx_paragraphs(path.read_bytes()))
+        assert len(items) == 40, path.name
+        assert items[0]["item_no"] == 1
+        assert items[-1]["item_no"] == 40
+        assert items[0]["answer"] in "ABCDE"
+        assert sum(it["points"] for it in items) == MAX_SCORE
 
 
 @pytest.mark.unit
