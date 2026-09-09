@@ -367,6 +367,58 @@ const App = (() => {
     t.textContent = `⏱ ${formatDuration(elapsed)}`;
   }
 
+  function vedicPenaltyForItem(n) {
+    const i = Number(n) || 0;
+    if (i <= 25) return 0;
+    if (i <= 35) return 1;
+    return 2;
+  }
+
+  function vedicMistakesTableHtml(res) {
+    const details = (res && res.details) || [];
+    const mistakes = details.filter((d) => !d.correct && !d.skipped);
+    const body = mistakes.length
+      ? mistakes
+          .map((d, idx) => {
+            const n = Number(d.item_no) || details.indexOf(d) + 1 || idx + 1;
+            const pen =
+              d.penalty != null && d.penalty !== ""
+                ? Number(d.penalty)
+                : vedicPenaltyForItem(n);
+            const deduct = pen > 0 ? `−${pen}` : "0";
+            const you = String(d.given_answer || "—")
+              .trim()
+              .toUpperCase()
+              .slice(0, 1) || "—";
+            const key = String(d.expected_answer || "—")
+              .trim()
+              .toUpperCase()
+              .slice(0, 1) || "—";
+            return `<tr>
+              <td>Q${escapeHtml(String(n))}</td>
+              <td>${escapeHtml(you)}</td>
+              <td>${escapeHtml(key)}</td>
+              <td class="num">${escapeHtml(deduct)}</td>
+            </tr>`;
+          })
+          .join("")
+      : `<tr><td colspan="4" class="muted">No mistakes.</td></tr>`;
+    return `
+      <div class="table-wrap exam-mistakes-wrap">
+        <table class="data-table exam-mistakes-table">
+          <thead>
+            <tr>
+              <th>Q</th>
+              <th>You</th>
+              <th>Key</th>
+              <th>Deduct</th>
+            </tr>
+          </thead>
+          <tbody>${body}</tbody>
+        </table>
+      </div>`;
+  }
+
   function showVedicResultsDialog(res) {
     const existing = document.getElementById("exam-results-overlay");
     if (existing) existing.remove();
@@ -386,6 +438,7 @@ const App = (() => {
         </div>
         <p class="muted">Official PNVMO / IVMO scoring: Q1–25 are 2 marks (no penalty), Q26–35 are 3 (−1 if wrong), Q36–40 are 4 (−2 if wrong). Blank is 0.</p>
         <p class="muted">Time ${formatDuration(res.total_elapsed_ms || 0)}</p>
+        ${vedicMistakesTableHtml(res)}
         <button type="button" class="btn" id="exam-results-done">Done</button>
       </div>`;
     document.body.appendChild(overlay);

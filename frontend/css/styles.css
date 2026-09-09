@@ -819,6 +819,27 @@ input:focus, textarea:focus, select:focus {
 }
 .exam-results-card {
   width: min(24rem, 100%);
+  max-height: min(92vh, 44rem);
+  text-align: center;
+}
+.exam-mistakes-wrap {
+  margin: 0.55rem 0 0.9rem;
+  text-align: left;
+  max-height: 11rem;
+  overflow: auto;
+}
+.exam-mistakes-table {
+  table-layout: fixed;
+  width: 100%;
+  font-size: 0.8rem;
+}
+.exam-mistakes-table th,
+.exam-mistakes-table td {
+  padding: 0.32rem 0.28rem;
+  white-space: nowrap;
+}
+.exam-mistakes-table td.muted {
+  white-space: normal;
   text-align: center;
 }
 .exam-score-line {

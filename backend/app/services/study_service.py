@@ -453,6 +453,7 @@ def complete_session(
         qtype = (question or {}).get("qtype") or "open"
         if qtype == "mcq":
             is_vedic = True
+        item_penalty = 0
         if is_vedic and qtype == "mcq":
             user_ans = raw_given
             scored = score_vedic_item(
@@ -465,6 +466,7 @@ def complete_session(
             correct = bool(scored["correct"])
             skipped = bool(scored["skipped"])
             marks = int(scored["marks"])
+            item_penalty = int(scored["penalty"])
             vedic_marks += marks
             if skipped:
                 blank_count += 1
@@ -500,12 +502,15 @@ def complete_session(
         details.append(
             {
                 "question_id": qid,
+                "item_no": int((question or {}).get("item_no") or 0),
                 "prompt": question.get("prompt") if question else "",
                 "given_answer": user_ans,
                 "expected_answer": expected,
                 "correct": correct,
                 "skipped": skipped,
                 "marks": marks,
+                "points": int((question or {}).get("points") or 0),
+                "penalty": item_penalty,
             }
         )
 
