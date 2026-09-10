@@ -357,10 +357,7 @@ const App = (() => {
         !state._vedicAutoSubmit
       ) {
         state._vedicAutoSubmit = true;
-        const form = document.getElementById("answer-form");
-        if (form) {
-          form.dispatchEvent(new Event("submit", { cancelable: true, bubbles: true }));
-        }
+        finishStudySession();
       }
       return;
     }
@@ -2146,6 +2143,7 @@ const App = (() => {
           <div class="progress-bar study-progress" style="margin:0.75rem 0">
             <span id="study-progress-fill" style="width:${pct}%"></span>
           </div>
+          ${isVedicSession(s) ? vedicQuestionStripHtml(questions, state.qIndex) : ""}
         </div>
 
         <div class="study-qa" id="study-qa">
@@ -2175,11 +2173,24 @@ const App = (() => {
               placeholder="Type here" ${inCountdown ? "disabled" : ""}
               value="${escapeAttr(saved || "")}" />`
             }
-            <div class="study-actions" id="study-actions">
+            <div class="study-actions ${isVedicSession(s) ? "vedic-actions" : ""}" id="study-actions">
+              ${
+                isVedicSession(s)
+                  ? `<div class="vedic-nav-row">
+              <button class="btn secondary" type="button" id="study-prev-btn"
+                ${inCountdown || state.qIndex <= 0 ? "disabled" : ""}>← Previous</button>
               <button class="btn study-next-btn" type="submit" id="study-next-btn"
                 tabindex="-1" ${inCountdown ? "disabled" : ""}>
-                ${isLast ? "Submit ✓" : "Next →"}
+                ${isLast ? "Review from Q1" : "Next →"}
               </button>
+            </div>
+            <button class="btn accent" type="button" id="study-submit-paper"
+              ${inCountdown ? "disabled" : ""}>Submit paper</button>`
+                  : `<button class="btn study-next-btn" type="submit" id="study-next-btn"
+                tabindex="-1" ${inCountdown ? "disabled" : ""}>
+                ${isLast ? "Submit ✓" : "Next →"}
+              </button>`
+              }
             </div>
             <p class="muted study-hint" id="study-hint">
               ${vedicHintHtml(s, q, isLast)}
@@ -2198,8 +2209,54 @@ const App = (() => {
     const n = Number(q && q.item_no) || state.qIndex + 1;
     const pen = n >= 36 ? "−2 if wrong" : n >= 26 ? "−1 if wrong" : "no penalty if wrong";
     return isLast
-      ? `Skip is safer than a guess (${pen}). Tap Submit when ready.`
-      : `Skip if unsure (${pen}). Tap Next to continue.`;
+      ? `Last question (${pen}). Review from Q1 or tap a number above — Submit paper when done.`
+      : `Tap a number above to review. Skip if unsure (${pen}).`;
+  }
+
+  function vedicQuestionHasAnswer(q) {
+    return Boolean(q && String(state.clientAnswers[q.question_id] || "").trim());
+  }
+
+  function vedicQuestionStripInnerHtml(questions, currentIndex) {
+    return (questions || [])
+      .map((q, i) => {
+        const n = Number(q.item_no) || i + 1;
+        const answered = vedicQuestionHasAnswer(q);
+        const cls = [
+          "vedic-qchip",
+          i === currentIndex ? "is-current" : "",
+          answered ? "is-answered" : "",
+        ]
+          .filter(Boolean)
+          .join(" ");
+        return `<button type="button" class="${cls}" data-vedic-goto="${i}" aria-current="${
+          i === currentIndex ? "true" : "false"
+        }" aria-label="Question ${n}${answered ? ", answered" : ", blank"}">${n}</button>`;
+      })
+      .join("");
+  }
+
+  function vedicQuestionStripHtml(questions, currentIndex) {
+    return `<div class="vedic-qstrip" id="vedic-qstrip" role="navigation" aria-label="Question list">${vedicQuestionStripInnerHtml(
+      questions,
+      currentIndex
+    )}</div>`;
+  }
+
+  function paintVedicStrip() {
+    const strip = document.getElementById("vedic-qstrip");
+    const s = state.session;
+    if (!strip || !s || !isVedicSession(s)) return;
+    strip.innerHTML = vedicQuestionStripInnerHtml(s.questions || [], state.qIndex);
+  }
+
+  function captureCurrentStudyAnswer() {
+    const s = state.session;
+    if (!s) return;
+    const q = (s.questions || [])[state.qIndex];
+    if (!q) return;
+    const input = document.getElementById("answer");
+    state.clientAnswers[q.question_id] = ((input && input.value) || "").trim();
   }
 
   function mcqChoicesHtml(q, saved) {
@@ -2340,11 +2397,26 @@ const App = (() => {
     const mcq = document.getElementById("mcq-choices");
     if (mcq) mcq.innerHTML = mcqChoicesHtml(q, saved);
 
+    const vedic = isVedicSession(s);
     const btn = document.getElementById("study-next-btn");
     if (btn) {
-      btn.textContent = isLast ? "Submit ✓" : "Next →";
+      btn.textContent = vedic
+        ? isLast
+          ? "Review from Q1"
+          : "Next →"
+        : isLast
+          ? "Submit ✓"
+          : "Next →";
       btn.disabled = false;
     }
+    const prevBtn = document.getElementById("study-prev-btn");
+    if (prevBtn) prevBtn.disabled = index <= 0;
+    const paperBtn = document.getElementById("study-submit-paper");
+    if (paperBtn && paperBtn.dataset.armed !== "1") {
+      paperBtn.disabled = false;
+      paperBtn.textContent = "Submit paper";
+    }
+    paintVedicStrip();
 
     const hint = document.getElementById("study-hint");
     if (hint) {
@@ -5999,7 +6071,7 @@ const App = (() => {
   }
 
   /** Two-step confirm on a button (avoids blocked window.confirm). Supports icon buttons. */
-  function armDangerButton(btn, armedLabel) {
+  function armDangerButton(btn, armedLabel, confirmToast) {
     if (btn.dataset.armed === "1") return true;
     const originalHtml = btn.innerHTML;
     btn.dataset.armed = "1";
@@ -6014,7 +6086,7 @@ const App = (() => {
         btn.classList.remove("danger-armed");
       }
     }, 4000);
-    toast("Tap the button again to confirm delete.");
+    toast(confirmToast || "Tap the button again to confirm delete.");
     return false;
   }
 
@@ -7039,6 +7111,10 @@ const App = (() => {
     if (input) input.disabled = false;
     const nextBtn = document.getElementById("study-next-btn");
     if (nextBtn) nextBtn.disabled = false;
+    const prevBtn = document.getElementById("study-prev-btn");
+    if (prevBtn) prevBtn.disabled = state.qIndex <= 0;
+    const paperBtn = document.getElementById("study-submit-paper");
+    if (paperBtn) paperBtn.disabled = false;
     const shell = document.getElementById("study-shell");
     if (shell) shell.classList.remove("study-countdown-active");
 
@@ -7068,9 +7144,18 @@ const App = (() => {
     const isLast = state.qIndex >= total - 1;
     const btn = document.getElementById("study-next-btn");
     if (!btn) return;
-    if (!isLast || isVedicSession(s)) {
+    const vedic = isVedicSession(s);
+    const prevBtn = document.getElementById("study-prev-btn");
+    if (prevBtn) prevBtn.disabled = state.qIndex <= 0 || state.studyTransitioning;
+    if (!isLast || vedic) {
       btn.disabled = false;
-      btn.textContent = isLast ? "Submit ✓" : "Next →";
+      btn.textContent = vedic
+        ? isLast
+          ? "Review from Q1"
+          : "Next →"
+        : isLast
+          ? "Submit ✓"
+          : "Next →";
       return;
     }
     const priorOk = (s.questions || []).slice(0, -1).every((q) =>
@@ -7078,6 +7163,146 @@ const App = (() => {
     );
     btn.disabled = !priorOk || state.studyTransitioning;
     btn.textContent = "Submit ✓";
+  }
+
+  async function goVedicQuestion(index, { animate = true } = {}) {
+    if (!isVedicSession(state.session) || state.studyPhase !== "answering") return;
+    if (state.studyTransitioning) return;
+    const questions = state.session.questions || [];
+    const dest = Math.max(0, Math.min(questions.length - 1, Number(index)));
+    if (!Number.isFinite(dest)) return;
+    captureCurrentStudyAnswer();
+    if (dest === state.qIndex) {
+      paintVedicStrip();
+      updateStudySubmitEnabled();
+      return;
+    }
+    pauseStudyTimer();
+    if (animate) {
+      state.studyTransitioning = true;
+      const qa = document.getElementById("study-qa");
+      if (qa) qa.classList.add("study-swap");
+      await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
+      showQuestionInPlace(dest);
+      if (qa) {
+        window.setTimeout(() => qa.classList.remove("study-swap"), 180);
+      }
+      state.studyTransitioning = false;
+    } else {
+      showQuestionInPlace(dest);
+    }
+    updateStudySubmitEnabled();
+    resumeStudyTimer();
+  }
+
+  async function requestVedicPaperSubmit() {
+    if (!isVedicSession(state.session) || state.studyPhase !== "answering") return;
+    if (state.studyTransitioning) return;
+    captureCurrentStudyAnswer();
+    const questions = state.session.questions || [];
+    const blank = questions.filter((q) => !vedicQuestionHasAnswer(q)).length;
+    const btn = document.getElementById("study-submit-paper");
+    if (blank > 0 && btn) {
+      if (
+        !armDangerButton(
+          btn,
+          `Submit ${blank} blank?`,
+          "Tap again to submit the paper."
+        )
+      ) {
+        return;
+      }
+    }
+    await finishStudySession();
+  }
+
+  async function finishStudySession() {
+    const s = state.session;
+    if (!s || state.studyPhase !== "answering") return;
+    const questions = s.questions || [];
+    const vedic = isVedicSession(s);
+    captureCurrentStudyAnswer();
+    pauseStudyTimer();
+    const nextBtn = document.getElementById("study-next-btn");
+    const paperBtn = document.getElementById("study-submit-paper");
+    if (nextBtn) {
+      nextBtn.disabled = true;
+      nextBtn.textContent = "Submitting…";
+    }
+    if (paperBtn) {
+      paperBtn.disabled = true;
+      paperBtn.textContent = "Submitting…";
+    }
+    const totalElapsed = getStudyElapsedMs();
+    clearStudyTimers();
+
+    const answers = questions.map((qq) => ({
+      question_id: qq.question_id,
+      answer: Object.prototype.hasOwnProperty.call(state.clientAnswers, qq.question_id)
+        ? state.clientAnswers[qq.question_id]
+        : vedic
+          ? ""
+          : "0",
+    }));
+
+    try {
+      let res;
+      if (s.is_assessment) {
+        res = await Api.completeAssessment(token(), s.session_id, {
+          total_elapsed_ms: totalElapsed,
+          answers,
+        });
+        state.studyPhase = "results";
+        state.studyResults = res;
+        StudyCache.invalidateLanding();
+        ProfileCache.invalidate();
+        InsightsCache.invalidate();
+      } else {
+        res = await Api.completeSession(token(), s.session_id, {
+          total_elapsed_ms: totalElapsed,
+          answers,
+        });
+        let setContext = null;
+        try {
+          if (res.subject_id && res.level_id) {
+            setContext = await getSetCompletionContext(res.subject_id, res.level_id);
+          }
+        } catch (_) {
+          setContext = null;
+        }
+        state.studyPhase = "results";
+        state.studyResults = { ...res, setContext };
+        StudyCache.invalidateLanding();
+        ProfileCache.invalidate();
+        InsightsCache.invalidate();
+        if (res.exam_kind === "vedic") {
+          setStudyModeUi(false);
+          document.documentElement.style.setProperty("--vv-keyboard", "0px");
+          showVedicResultsDialog(state.studyResults);
+          return;
+        }
+      }
+      setStudyModeUi(false);
+      document.documentElement.style.setProperty("--vv-keyboard", "0px");
+      render();
+    } catch (err) {
+      toast(err.message || String(err), true);
+      state._vedicAutoSubmit = false;
+      if (nextBtn) {
+        nextBtn.disabled = false;
+        nextBtn.textContent = vedic ? "Next →" : "Submit";
+      }
+      if (paperBtn) {
+        paperBtn.disabled = false;
+        paperBtn.textContent = "Submit paper";
+        paperBtn.dataset.armed = "0";
+        paperBtn.classList.remove("danger-armed");
+      }
+      updateStudySubmitEnabled();
+      state.timerAccumulatedMs = totalElapsed;
+      state.timerRunningSince = null;
+      resumeStudyTimer();
+    }
   }
 
   function bindStudySessionControls() {
@@ -7106,6 +7331,32 @@ const App = (() => {
     if (!isVedicSession(state.session)) {
       keepAnswerKeyboardOpen();
     }
+    const shell = document.getElementById("study-shell");
+    if (shell && shell.dataset.vedicNav !== "1") {
+      shell.dataset.vedicNav = "1";
+      shell.addEventListener("click", (ev) => {
+        if (!isVedicSession(state.session) || state.studyPhase !== "answering") return;
+        const t = ev.target && ev.target.closest ? ev.target : null;
+        if (!t) return;
+        const goto = t.closest("[data-vedic-goto]");
+        if (goto && shell.contains(goto)) {
+          ev.preventDefault();
+          const i = Number(goto.getAttribute("data-vedic-goto"));
+          if (Number.isFinite(i)) goVedicQuestion(i, { animate: false });
+          return;
+        }
+        if (t.closest("#study-prev-btn")) {
+          ev.preventDefault();
+          if (state.qIndex > 0) goVedicQuestion(state.qIndex - 1);
+          return;
+        }
+        if (t.closest("#study-submit-paper")) {
+          ev.preventDefault();
+          requestVedicPaperSubmit();
+        }
+      });
+    }
+
     answerForm.addEventListener("click", (ev) => {
       const btn = ev.target && ev.target.closest && ev.target.closest("[data-mcq]");
       if (!btn || !answerForm.contains(btn)) return;
@@ -7116,6 +7367,9 @@ const App = (() => {
       answerForm.querySelectorAll(".mcq-choice").forEach((el) => {
         el.classList.toggle("is-selected", el.getAttribute("data-mcq") === key);
       });
+      const cur = (state.session.questions || [])[state.qIndex];
+      if (cur) state.clientAnswers[cur.question_id] = key;
+      paintVedicStrip();
     });
     input.addEventListener("input", () => updateStudySubmitEnabled());
     // If the OS blurs the field (e.g. after animation), reopen the keypad while answering
@@ -7152,6 +7406,13 @@ const App = (() => {
       }
 
       state.clientAnswers[q.question_id] = raw;
+
+      if (vedic) {
+        const dest = isLast ? 0 : state.qIndex + 1;
+        await goVedicQuestion(dest);
+        if (isLast) toast("Review from Q1. Submit paper when ready.");
+        return;
+      }
 
       if (!isLast) {
         // Pause timer for transition (loading next question not counted)
@@ -7192,74 +7453,7 @@ const App = (() => {
         return;
       }
 
-      // Final submit — batch to server (pause so submit network time is not counted)
-      pauseStudyTimer();
-      nextBtn.disabled = true;
-      nextBtn.textContent = "Submitting…";
-      const totalElapsed = getStudyElapsedMs();
-      clearStudyTimers();
-
-      const answers = questions.map((qq) => ({
-        question_id: qq.question_id,
-        answer: Object.prototype.hasOwnProperty.call(state.clientAnswers, qq.question_id)
-          ? state.clientAnswers[qq.question_id]
-          : vedic
-            ? ""
-            : "0",
-      }));
-
-      try {
-        let res;
-        if (state.session.is_assessment) {
-          res = await Api.completeAssessment(token(), state.session.session_id, {
-            total_elapsed_ms: totalElapsed,
-            answers,
-          });
-          state.studyPhase = "results";
-          state.studyResults = res;
-          // Progress / radar / profile stats out of date
-          StudyCache.invalidateLanding();
-          ProfileCache.invalidate();
-          InsightsCache.invalidate();
-        } else {
-          res = await Api.completeSession(token(), state.session.session_id, {
-            total_elapsed_ms: totalElapsed,
-            answers,
-          });
-          // Enrich results with band/topic completion so messaging is accurate
-          let setContext = null;
-          try {
-            if (res.subject_id && res.level_id) {
-              setContext = await getSetCompletionContext(res.subject_id, res.level_id);
-            }
-          } catch (_) {
-            setContext = null;
-          }
-          state.studyPhase = "results";
-          state.studyResults = { ...res, setContext };
-          StudyCache.invalidateLanding();
-          ProfileCache.invalidate();
-          InsightsCache.invalidate();
-          if (res.exam_kind === "vedic") {
-            setStudyModeUi(false);
-            document.documentElement.style.setProperty("--vv-keyboard", "0px");
-            showVedicResultsDialog(state.studyResults);
-            return;
-          }
-        }
-        setStudyModeUi(false);
-        document.documentElement.style.setProperty("--vv-keyboard", "0px");
-        render();
-      } catch (err) {
-        toast(err.message || String(err), true);
-        state._vedicAutoSubmit = false;
-        nextBtn.disabled = false;
-        nextBtn.textContent = "Submit";
-        // Resume timer after failed submit so learner can continue
-        state.timerAccumulatedMs = totalElapsed;
-        state.timerRunningSince = null;
-        resumeStudyTimer();
-      }
+      await finishStudySession();
     });
   }
 

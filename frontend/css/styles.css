@@ -911,6 +911,85 @@ input:focus, textarea:focus, select:focus {
   text-align: left;
 }
 
+/* Vedic: question map at the top + review nav (no auto-submit on last). */
+.vedic-qstrip {
+  display: grid;
+  grid-template-columns: repeat(10, minmax(0, 1fr));
+  gap: 0.18rem;
+  margin-top: 0.45rem;
+}
+.study-countdown-active .vedic-qstrip {
+  pointer-events: none;
+  opacity: 0.45;
+}
+.vedic-qchip {
+  min-height: 1.55rem !important;
+  height: 1.55rem;
+  padding: 0 !important;
+  margin: 0;
+  border: 1px solid #99f6e4;
+  background: #fff;
+  border-radius: 6px;
+  font-size: 0.65rem;
+  font-weight: 700;
+  color: var(--ink);
+  line-height: 1;
+  touch-action: manipulation;
+  -webkit-tap-highlight-color: transparent;
+}
+.vedic-qchip.is-answered {
+  background: #ccfbf1;
+  border-color: #2dd4bf;
+  color: var(--brand-dark);
+}
+.vedic-qchip.is-current {
+  background: var(--brand);
+  border-color: var(--brand-dark);
+  color: #fff;
+  box-shadow: 0 0 0 2px rgba(15, 118, 110, 0.28);
+}
+.study-vedic .vedic-nav-row {
+  display: flex;
+  gap: 0.45rem;
+}
+.study-vedic .vedic-nav-row .btn {
+  flex: 1 1 0;
+  min-height: 2.85rem !important;
+  height: auto !important;
+  font-size: 1rem !important;
+  box-shadow: 0 3px 0 #115e59;
+  border-radius: 12px !important;
+}
+.study-vedic .vedic-nav-row .btn.secondary {
+  box-shadow: 0 3px 0 #94a3b8;
+  background: #fff;
+  color: var(--brand-dark);
+  border: 2px solid #99f6e4;
+}
+.study-vedic .study-actions .study-next-btn {
+  min-height: 2.85rem !important;
+  height: auto !important;
+  font-size: 1rem !important;
+}
+.study-vedic #study-submit-paper {
+  width: 100%;
+  margin-top: 0.4rem;
+  min-height: 2.85rem !important;
+  height: auto !important;
+  font-size: 1.05rem !important;
+  font-weight: 800;
+  border-radius: 12px !important;
+  box-shadow: 0 3px 0 #b45309;
+}
+.study-vedic .study-progress {
+  margin: 0.35rem 0 0 !important;
+}
+body.study-mode .study-vedic .study-hint {
+  display: block;
+  font-size: 0.75rem;
+  text-align: left;
+}
+
 .badge {
   display: inline-block;
   font-size: 0.72rem;
