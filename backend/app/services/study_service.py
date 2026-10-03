@@ -268,7 +268,13 @@ def _ensure_level_unlocked(user_id: str, subject_id: str, level: dict[str, Any])
 
     Seed-style ids ``l1`` / ``l2`` are treated as majors 1 / 2.
     If names cannot be parsed, falls back to sequential ``order`` unlock.
+
+    Vedic contest papers (``exam_kind=vedic``) are independent — any set can be
+    taken in any order, with no prerequisite.
     """
+    if str(level.get("exam_kind") or "") == "vedic":
+        return
+
     levels = subject_service.list_levels(subject_id)
     if not levels:
         raise StudyError("No levels configured for subject")

@@ -81,6 +81,53 @@ def test_parse_paper_b_docx():
     assert total == MAX_SCORE
 
 
+_MINI_VEDIC = """1.  1 + 1 =
+A  1
+B  2
+C  3
+D  4
+E  5
+[ans=B]
+"""
+
+
+@pytest.mark.unit
+def test_vedic_sets_can_be_started_in_any_order(dynamodb_table):
+    """Contest papers must not use sequential Level N unlock."""
+    from app.services import subject_service, study_service
+    from app.validation import LevelCreate, SubjectCreate
+
+    sid = "vedic-any-order"
+    subject_service.create_subject(
+        SubjectCreate(
+            subject_id=sid,
+            category="Mathematics",
+            topic="Vedic Paper B",
+            grade_level="Grade 5",
+        )
+    )
+    for n in range(1, 6):
+        lid = str(n)
+        subject_service.create_level(
+            sid,
+            LevelCreate(
+                level_id=lid,
+                name=f"Vedic - Paper B - Primary (11yrs & under) Set {n}",
+                order=n,
+            ),
+        )
+        summary = subject_service.import_questions(
+            sid, lid, text=_MINI_VEDIC, replace=True
+        )
+        assert summary["exam_kind"] == "vedic"
+
+    # Start the last set first, then a middle set — must not 403.
+    for lid in ("5", "3", "1", "4", "2"):
+        sess = study_service.start_session("u-vedic-order", sid, lid)
+        assert sess["level_id"] == lid
+        assert sess["exam_kind"] == "vedic"
+
+
 @pytest.mark.unit
 def test_import_vedic_and_complete_session(dynamodb_table):
     from app.services import subject_service, study_service, user_service
