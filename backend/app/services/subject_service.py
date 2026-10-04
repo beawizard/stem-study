@@ -765,6 +765,10 @@ def _public_subject(item: dict[str, Any]) -> dict[str, Any]:
         "content_kind": item.get("content_kind") or "",
         "presentation_ready": bool(item.get("presentation_ready")),
         "page_count": int(item.get("page_count") or 0),
+        "science_ready": bool(item.get("science_ready")),
+        "summary": item.get("summary") or "",
+        "explainer_video_url": item.get("explainer_video_url") or "",
+        "image_url": item.get("image_url") or "",
         "created_at": item.get("created_at"),
     }
 

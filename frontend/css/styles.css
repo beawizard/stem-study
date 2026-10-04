@@ -1783,6 +1783,61 @@ body.admin-mode .usage-wrap.table-wrap {
 }
 .stem-tile-mathematics { border-color: #5eead4; }
 .stem-tile-technology { border-color: #7dd3fc; }
+.stem-tile-science { border-color: #86efac; }
+
+.sci-summary-input {
+  min-height: 10.5rem;
+  font-family: inherit;
+  line-height: 1.45;
+}
+.sci-reader {
+  margin-top: 0.9rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+.sci-reader-meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.45rem 0.75rem;
+}
+.sci-summary {
+  font-size: 0.95rem;
+  line-height: 1.5;
+}
+.sci-summary p {
+  margin: 0 0 0.7rem;
+}
+.sci-summary p:last-child {
+  margin-bottom: 0;
+}
+.sci-cover {
+  width: 100%;
+  border-radius: 12px;
+  overflow: hidden;
+  background: #f8fafc;
+  border: 1px solid var(--border);
+}
+.sci-cover img {
+  display: block;
+  width: 100%;
+  height: auto;
+}
+.sci-video-wrap {
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+.sci-video-label {
+  font-size: 0.85rem;
+  font-weight: 700;
+}
+.sci-video-link {
+  word-break: break-all;
+  color: var(--brand-dark);
+}
 
 .tech-reader {
   margin-top: 0.7rem;

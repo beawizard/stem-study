@@ -11,6 +11,8 @@ from pydantic import BaseModel, Field, field_validator, model_validator, ConfigD
 # Shared constraints
 MAX_TITLE_LEN = 200
 MAX_DESC_LEN = 2000
+MAX_SUMMARY_LEN = 4000
+MAX_VIDEO_URL_LEN = 1000
 MAX_SUBJECT_ID_LEN = 64
 MAX_LEVEL_ID_LEN = 64
 MAX_CSV_ROWS = 5000
@@ -390,6 +392,35 @@ class TechnologyPageSpec(BaseModel):
     audio_ext: str = Field(default="", max_length=8)
     image_content_type: str = Field(default="image/jpeg", max_length=80)
     audio_content_type: str = Field(default="", max_length=80)
+
+
+class ScienceTopicCreate(BaseModel):
+    """POST /science/topics — admin creates a Science topic (summary + cover + video)."""
+
+    model_config = ConfigDict(str_strip_whitespace=True, extra="forbid")
+
+    topic: str = Field(..., min_length=1, max_length=100)
+    grade_level: str | None = Field(default=None, max_length=32)
+    summary: str = Field(default="", max_length=MAX_SUMMARY_LEN)
+    explainer_video_url: str = Field(default="", max_length=MAX_VIDEO_URL_LEN)
+    image_ext: str = Field(default="", max_length=8)
+    image_content_type: str = Field(default="", max_length=80)
+    replace: bool = False
+
+    @field_validator("grade_level")
+    @classmethod
+    def validate_grade_level(cls, v: str | None) -> str | None:
+        return normalize_content_grade(v)
+
+    @field_validator("explainer_video_url")
+    @classmethod
+    def validate_video_url(cls, v: str) -> str:
+        raw = (v or "").strip()
+        if not raw:
+            return ""
+        if not (raw.startswith("http://") or raw.startswith("https://")):
+            raise ValueError("Explainer video must be an http(s) URL")
+        return raw
 
 
 class TechnologyTopicCreate(BaseModel):

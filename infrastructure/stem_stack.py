@@ -348,6 +348,8 @@ class StemStack(Stack):
         if frontend_bucket is not None:
             frontend_bucket.grant_put(fn, "technology/*")
             frontend_bucket.grant_read(fn, "technology/*")
+            frontend_bucket.grant_put(fn, "science/*")
+            frontend_bucket.grant_read(fn, "science/*")
         return fn
 
     def _create_http_api(

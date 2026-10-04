@@ -24,7 +24,7 @@ const App = (() => {
     adminSubjectId: null,
     adminLevelId: null,
     // Study page subject pickers (Category + Topic, same model as Admin)
-    studyView: "hub", // hub (STEM tiles) | math | tech
+    studyView: "hub", // hub (STEM tiles) | math | tech | sci
     studyCategory: null,
     studySubjectId: null,
     studyFocusLevelId: null, // deep-link from Insights level link
@@ -1608,13 +1608,23 @@ const App = (() => {
       </div>`;
   }
 
-  function viewStudyHub() {
+  async function viewStudyHub() {
+    let scienceEnabled = false;
+    try {
+      const data = await StudyCache.loadStudyData(token(), null);
+      const subjects = data.subjects || [];
+      scienceEnabled = subjects.some(
+        (s) => (s.category || "") === "Science" && s.science_ready
+      );
+    } catch (_) {
+      scienceEnabled = false;
+    }
     const tiles = [
       {
         id: "Science",
         title: "Science",
         blurb: "Explore the natural world.",
-        enabled: false,
+        enabled: scienceEnabled,
       },
       {
         id: "Technology",
@@ -1748,6 +1758,116 @@ const App = (() => {
       </div>`;
   }
 
+  async function viewStudyScience() {
+    const tok = token();
+    let allSubjects = [];
+    try {
+      const data = await StudyCache.loadStudyData(tok, null);
+      allSubjects = data.subjects || [];
+    } catch (e) {
+      return `<div class="card">
+        <button type="button" class="btn secondary btn-sm" data-study-hub>← Study</button>
+        <h1>Science</h1>
+        <p class="muted">${escapeHtml(e.message || "Could not load topics.")}</p>
+      </div>`;
+    }
+
+    const sciSubjects = allSubjects.filter(
+      (s) => (s.category || "") === "Science" && s.science_ready
+    );
+    if (!state.studyCategory || state.studyCategory !== "Science") {
+      state.studyCategory = "Science";
+    }
+    const topics = sciSubjects.slice().sort((a, b) =>
+      String(a.topic || a.name || "").localeCompare(
+        String(b.topic || b.name || "")
+      )
+    );
+    if (
+      state.studySubjectId &&
+      !topics.some((s) => s.subject_id === state.studySubjectId)
+    ) {
+      state.studySubjectId = null;
+    }
+    const topicOptions = topics.length
+      ? [`<option value="">Select a topic…</option>`]
+          .concat(
+            topics.map(
+              (s) =>
+                `<option value="${escapeAttr(s.subject_id)}" ${
+                  s.subject_id === state.studySubjectId ? "selected" : ""
+                }>${escapeHtml(s.topic || s.name || s.subject_id)}</option>`
+            )
+          )
+          .join("")
+      : `<option value="">No topics yet</option>`;
+
+    const selected = topics.find((s) => s.subject_id === state.studySubjectId);
+    let readerHtml = "";
+    if (selected) {
+      try {
+        const detail = await Api.getScienceTopic(tok, selected.subject_id);
+        readerHtml = scienceReaderHtml(detail);
+      } catch (err) {
+        readerHtml = `<p class="muted">${escapeHtml(err.message || "Could not load this topic.")}</p>`;
+      }
+    } else {
+      readerHtml = `<p class="muted study-topic-desc">Select a Science topic to read the summary, see the cover image, and open the explainer video.</p>`;
+    }
+    return `
+      <div class="card study-landing-card sci-landing-card">
+        <button type="button" class="btn secondary btn-sm" data-study-hub>← Study</button>
+        <h1 class="study-page-title" style="margin-top:0.5rem">Science</h1>
+        <div class="study-pickers study-pickers-stacked" style="max-width:22rem;margin-top:0.75rem">
+          <div class="study-picker-field">
+            <label for="study-topic">Topic</label>
+            <select id="study-topic" ${topics.length ? "" : "disabled"}>${topicOptions}</select>
+          </div>
+        </div>
+        ${readerHtml}
+      </div>`;
+  }
+
+  function scienceReaderHtml(detail) {
+    const grade = detail.grade_level
+      ? `<span class="study-grade-badge">${escapeHtml(detail.grade_level)}</span>`
+      : "";
+    const summaryHtml = formatScienceSummary(detail.summary || detail.description || "");
+    const imageHtml = detail.image_url
+      ? `<div class="sci-cover"><img src="${escapeAttr(detail.image_url)}" alt="${escapeAttr(
+          detail.topic || detail.name || "Science topic"
+        )}" /></div>`
+      : `<p class="muted">No cover image for this topic.</p>`;
+    const video = (detail.explainer_video_url || "").trim();
+    const videoHtml = video
+      ? `<p class="sci-video-wrap">
+          <span class="sci-video-label">Explainer video</span>
+          <a class="sci-video-link" href="${escapeAttr(video)}" target="_blank" rel="noopener noreferrer">${escapeHtml(
+            video
+          )}</a>
+        </p>`
+      : `<p class="muted">No explainer video for this topic.</p>`;
+    return `
+      <div class="sci-reader">
+        <div class="sci-reader-meta">
+          <strong>${escapeHtml(detail.topic || detail.name || "Topic")}</strong>
+          ${grade}
+        </div>
+        <div class="sci-summary">${summaryHtml}</div>
+        ${imageHtml}
+        ${videoHtml}
+      </div>`;
+  }
+
+  function formatScienceSummary(text) {
+    const t = String(text || "").trim();
+    if (!t) return `<p class="muted">No summary yet.</p>`;
+    return t
+      .split(/\n+/)
+      .map((p) => `<p>${escapeHtml(p)}</p>`)
+      .join("");
+  }
+
   function technologyReaderHtml(detail) {
     const pages = (detail && detail.pages) || [];
     if (!pages.length) {
@@ -1814,14 +1934,18 @@ const App = (() => {
 
       if (state.studyFocusLevelId && state.studyView === "hub") {
         const cat = state.studyCategory || "Mathematics";
-        state.studyView = cat === "Technology" ? "tech" : "math";
+        state.studyView =
+          cat === "Technology" ? "tech" : cat === "Science" ? "sci" : "math";
       }
 
       if (!state.studyView || state.studyView === "hub") {
-        return viewStudyHub();
+        return await viewStudyHub();
       }
       if (state.studyView === "tech") {
         return viewStudyTechnology();
+      }
+      if (state.studyView === "sci") {
+        return viewStudyScience();
       }
 
       const tok = token();
@@ -3330,6 +3454,60 @@ const App = (() => {
             </tbody>
           </table>
         </div>
+      </div>
+
+      <div class="card">
+        <h2>Science topics</h2>
+        <p class="muted">Add a Science topic with a summary, cover image, and explainer video URL. Learners pick the topic on the Study page.</p>
+        <form id="admin-sci-form" class="stack">
+          <div class="row">
+            <div class="grow">
+              <label for="sci-topic-select">Topic</label>
+              <select id="sci-topic-select">
+                <option value="">＋ New topic…</option>
+                ${
+                  (subjects || [])
+                    .filter((s) => (s.category || "") === "Science")
+                    .map(
+                      (s) =>
+                        `<option value="${escapeAttr(s.topic || s.name || "")}">${escapeHtml(
+                          s.topic || s.name || s.subject_id
+                        )}${s.science_ready ? " ✓" : ""}</option>`
+                    )
+                    .join("")
+                }
+              </select>
+            </div>
+            <div class="grow">
+              <label for="sci-topic-name">Topic name</label>
+              <input id="sci-topic-name" maxlength="100" placeholder="e.g. Plants and Photosynthesis" required />
+            </div>
+          </div>
+          <div>
+            <label for="sci-grade-level">Grade level</label>
+            <select id="sci-grade-level">${gradeSelectOptionsHtml("Grade 3")}</select>
+          </div>
+          <div>
+            <label for="sci-summary">Summary</label>
+            <textarea id="sci-summary" class="sci-summary-input" maxlength="4000" rows="8"
+              placeholder="Write 5–10 sentences learners will read for this topic."></textarea>
+          </div>
+          <div>
+            <label for="sci-image">Cover image</label>
+            <input id="sci-image" type="file" accept="image/png,image/jpeg,image/jpg,image/webp,image/gif,image/bmp,.png,.jpg,.jpeg,.webp,.gif,.bmp" />
+            <p class="muted" style="margin:0.35rem 0 0">PNG, JPEG, WebP, GIF, or other image. Required for a new topic; optional when replacing an existing one.</p>
+          </div>
+          <div>
+            <label for="sci-video">Explainer video</label>
+            <input id="sci-video" type="url" maxlength="1000" placeholder="https://…" />
+          </div>
+          <label class="check-row">
+            <input type="checkbox" id="sci-replace" />
+            Replace this topic if it already exists
+          </label>
+          <button class="btn accent" type="submit" id="admin-sci-submit">Save Science topic</button>
+          <div id="sci-import-log" class="muted import-log hidden"></div>
+        </form>
       </div>
 
       <div class="card">
@@ -6872,6 +7050,115 @@ const App = (() => {
       };
     }
 
+    const sciTopicSelect = document.getElementById("sci-topic-select");
+    const sciTopicName = document.getElementById("sci-topic-name");
+    if (sciTopicSelect) {
+      sciTopicSelect.onchange = () => {
+        const v = sciTopicSelect.value || "";
+        const summaryEl = document.getElementById("sci-summary");
+        const videoEl = document.getElementById("sci-video");
+        const gradeEl = document.getElementById("sci-grade-level");
+        if (!v) {
+          if (sciTopicName) sciTopicName.value = "";
+          if (summaryEl) summaryEl.value = "";
+          if (videoEl) videoEl.value = "";
+          return;
+        }
+        if (sciTopicName) sciTopicName.value = v;
+        const found = (state._adminSubjects || []).find(
+          (s) =>
+            (s.category || "") === "Science" &&
+            (s.topic || s.name || "") === v
+        );
+        if (found) {
+          if (gradeEl && found.grade_level) gradeEl.value = found.grade_level;
+          if (summaryEl) summaryEl.value = found.summary || found.description || "";
+          if (videoEl) videoEl.value = found.explainer_video_url || "";
+        }
+      };
+    }
+    const sciForm = document.getElementById("admin-sci-form");
+    if (sciForm) {
+      sciForm.onsubmit = async (e) => {
+        e.preventDefault();
+        const topic = (document.getElementById("sci-topic-name")?.value || "").trim();
+        const grade = (document.getElementById("sci-grade-level")?.value || "").trim();
+        const summary = (document.getElementById("sci-summary")?.value || "").trim();
+        const video = (document.getElementById("sci-video")?.value || "").trim();
+        const imageInput = document.getElementById("sci-image");
+        const file = imageInput && imageInput.files && imageInput.files[0];
+        const replace = Boolean(document.getElementById("sci-replace")?.checked);
+        const logEl = document.getElementById("sci-import-log");
+        const submitBtn = document.getElementById("admin-sci-submit");
+        if (!topic) {
+          toast("Enter a topic name.", true);
+          return;
+        }
+        const existing = (state._adminSubjects || []).find(
+          (s) =>
+            (s.category || "") === "Science" &&
+            (s.topic || s.name || "") === topic
+        );
+        const hasExistingImage = Boolean(
+          existing && (existing.image_url || existing.science_ready)
+        );
+        if (file && !isScienceImageFile(file)) {
+          toast("Choose an image file (PNG, JPEG, WebP, GIF, or similar).", true);
+          return;
+        }
+        if (!file && !hasExistingImage) {
+          toast("Choose a cover image for this Science topic.", true);
+          return;
+        }
+        if (video && !/^https?:\/\//i.test(video)) {
+          toast("Explainer video must be an http(s) URL.", true);
+          return;
+        }
+        if (submitBtn) submitBtn.disabled = true;
+        const log = (msg) => {
+          if (!logEl) return;
+          logEl.classList.remove("hidden");
+          logEl.textContent = (logEl.textContent ? logEl.textContent + "\n" : "") + msg;
+        };
+        if (logEl) {
+          logEl.classList.remove("hidden");
+          logEl.textContent = "Saving Science topic…";
+        }
+        try {
+          const body = {
+            topic,
+            grade_level: grade || null,
+            summary,
+            explainer_video_url: video,
+            replace,
+          };
+          if (file) {
+            const ext = (file.name.split(".").pop() || "jpg").toLowerCase();
+            body.image_ext = ext;
+            body.image_content_type = file.type || guessTechMime(ext);
+          }
+          const started = await Api.startScienceTopic(token(), body);
+          if (file && started.image_put_url) {
+            log("Uploading cover image…");
+            await putTechFile(
+              started.image_put_url,
+              file,
+              started.image_content_type || file.type
+            );
+          }
+          await Api.completeScienceTopic(token(), started.subject_id);
+          toast(`Science topic “${topic}” is ready`);
+          StudyCache.invalidateAll();
+          render();
+        } catch (err) {
+          toast(err.message || String(err), true);
+          log(err.message || String(err));
+        } finally {
+          if (submitBtn) submitBtn.disabled = false;
+        }
+      };
+    }
+
     const techTopicSelect = document.getElementById("tech-topic-select");
     const techTopicName = document.getElementById("tech-topic-name");
     if (techTopicSelect && techTopicName) {
@@ -7537,7 +7824,11 @@ const App = (() => {
         if (category) state.studyCategory = category;
         if (levelId) state.studyFocusLevelId = levelId;
         state.studyView =
-          category === "Technology" ? "tech" : "math";
+          category === "Technology"
+            ? "tech"
+            : category === "Science"
+              ? "sci"
+              : "math";
         navigate("study");
       };
     });
@@ -7570,6 +7861,10 @@ const App = (() => {
         } else if (stem === "Technology") {
           state.studyView = "tech";
           state.studyCategory = "Technology";
+          state.studySubjectId = null;
+        } else if (stem === "Science") {
+          state.studyView = "sci";
+          state.studyCategory = "Science";
           state.studySubjectId = null;
         } else {
           return;
@@ -8018,6 +8313,13 @@ const App = (() => {
       },
       { passive: true }
     );
+  }
+
+  function isScienceImageFile(file) {
+    if (!file) return false;
+    const name = String(file.name || "").toLowerCase();
+    if (/\.(png|jpe?g|webp|gif|bmp)$/.test(name)) return true;
+    return String(file.type || "").startsWith("image/");
   }
 
   function guessTechMime(ext) {

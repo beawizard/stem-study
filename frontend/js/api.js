@@ -131,6 +131,16 @@ const Api = (() => {
         { token }
       ),
     createSubject: (token, body) => request("/subjects", { method: "POST", body, token }),
+    listScienceTopics: (token) => request("/science/topics", { token }),
+    getScienceTopic: (token, subjectId) =>
+      request(`/science/topics/${encodeURIComponent(subjectId)}`, { token }),
+    startScienceTopic: (token, body) =>
+      request("/science/topics", { method: "POST", body, token }),
+    completeScienceTopic: (token, subjectId) =>
+      request(`/science/topics/${encodeURIComponent(subjectId)}/complete`, {
+        method: "POST",
+        token,
+      }),
     listTechnologyTopics: (token) => request("/technology/topics", { token }),
     getTechnologyTopic: (token, subjectId) =>
       request(`/technology/topics/${encodeURIComponent(subjectId)}`, { token }),

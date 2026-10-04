@@ -40,6 +40,10 @@ Routes (all require Cognito JWT unless noted):
   GET               /admin/payments              (admin)
   POST              /admin/payments/{user_id}/{payment_id}/verify  (admin)
   POST              /admin/seed                  (admin)
+  POST              /science/topics              (admin — start Science topic, presigned cover PUT)
+  POST              /science/topics/{id}/complete  (admin)
+  GET               /science/topics
+  GET               /science/topics/{id}         (summary + cover image + explainer URL)
   POST              /technology/topics           (admin — start folder import, presigned S3)
   POST              /technology/topics/{id}/complete  (admin)
   GET               /technology/topics
@@ -75,9 +79,11 @@ from app.services import (
     study_service,
     subject_service,
     task_service,
+    science_service,
     technology_service,
     user_service,
 )
+from app.services.science_service import ScienceError
 from app.services.technology_service import TechnologyError
 from app.services.mastery_service import MasteryForbidden, MasteryNotFound
 from app.services.payment_service import PaymentError, PaymentNotFound
@@ -112,6 +118,7 @@ from app.validation import (
     SubjectUpdate,
     TaskCreate,
     TaskUpdate,
+    ScienceTopicCreate,
     TechnologyTopicCreate,
     TopicAccessPing,
     parse_body,
@@ -123,6 +130,8 @@ logger.setLevel(logging.INFO)
 # path param patterns
 _TASK_ID = re.compile(r"^/tasks/([^/]+)$")
 _MASTERY_ID = re.compile(r"^/mastery/([^/]+)$")
+_SCI_TOPIC = re.compile(r"^/science/topics/([^/]+)$")
+_SCI_TOPIC_COMPLETE = re.compile(r"^/science/topics/([^/]+)/complete$")
 _TECH_TOPIC = re.compile(r"^/technology/topics/([^/]+)$")
 _TECH_TOPIC_COMPLETE = re.compile(r"^/technology/topics/([^/]+)/complete$")
 _SUBJECT_ID = re.compile(r"^/subjects/([^/]+)$")
@@ -759,6 +768,45 @@ def _route(
             return ok(access_service.list_topic_usage(sid, limit=100))
         except SubjectNotFound:
             return not_found("Topic not found")
+
+    # --- Science topics ---
+    if method == "GET" and path == "/science/topics":
+        return ok({"topics": science_service.list_science_topics()})
+
+    if method == "POST" and path == "/science/topics":
+        require_admin(user)
+        data = parse_body(ScienceTopicCreate, body)
+        try:
+            return created(
+                science_service.start_topic_upload(
+                    data, admin_user_id=user.user_id
+                )
+            )
+        except ConflictError as exc:
+            return bad_request(str(exc))
+        except ScienceError as exc:
+            return bad_request(str(exc))
+        except ValueError as exc:
+            return bad_request(str(exc))
+
+    m_sci_done = _SCI_TOPIC_COMPLETE.match(path)
+    if m_sci_done and method == "POST":
+        require_admin(user)
+        sid = unquote(m_sci_done.group(1))
+        try:
+            return ok(science_service.complete_topic_upload(sid))
+        except SubjectNotFound:
+            return not_found("Science topic not found")
+        except ScienceError as exc:
+            return bad_request(str(exc))
+
+    m_sci = _SCI_TOPIC.match(path)
+    if m_sci and method == "GET":
+        sid = unquote(m_sci.group(1))
+        try:
+            return ok(science_service.get_science_topic(sid))
+        except SubjectNotFound:
+            return not_found("Science topic not found")
 
     # --- Technology presentation topics ---
     if method == "GET" and path == "/technology/topics":
