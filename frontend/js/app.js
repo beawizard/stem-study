@@ -1840,12 +1840,12 @@ const App = (() => {
       : `<p class="muted">No cover image for this topic.</p>`;
     const video = (detail.explainer_video_url || "").trim();
     const videoHtml = video
-      ? `<p class="sci-video-wrap">
+      ? `<div class="sci-video-wrap">
           <span class="sci-video-label">Explainer video</span>
           <a class="sci-video-link" href="${escapeAttr(video)}" target="_blank" rel="noopener noreferrer">${escapeHtml(
             video
           )}</a>
-        </p>`
+        </div>`
       : `<p class="muted">No explainer video for this topic.</p>`;
     return `
       <div class="sci-reader">
@@ -3497,7 +3497,7 @@ const App = (() => {
             <input id="sci-image" type="file" accept="image/png,image/jpeg,image/jpg,image/webp,image/gif,image/bmp,.png,.jpg,.jpeg,.webp,.gif,.bmp" />
             <p class="muted" style="margin:0.35rem 0 0">PNG, JPEG, WebP, GIF, or other image. Required for a new topic; optional when replacing an existing one.</p>
           </div>
-          <div>
+          <div class="sci-video-field">
             <label for="sci-video">Explainer video</label>
             <input id="sci-video" type="url" maxlength="1000" placeholder="https://…" />
           </div>
