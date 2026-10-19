@@ -51,7 +51,12 @@ def test_science_topic_create_validation():
         image_ext="png",
     )
     assert s.topic == "Plants"
+    assert s.category == "Science"
     assert s.explainer_video_url.startswith("https://")
+    eng = ScienceTopicCreate(topic="Bridges", category="engineering")
+    assert eng.category == "Engineering"
+    with pytest.raises(Exception):
+        ScienceTopicCreate(topic="X", category="History")
     with pytest.raises(Exception):
         ScienceTopicCreate(topic="Plants", explainer_video_url="youtube.com/watch")
     with pytest.raises(Exception):
@@ -190,6 +195,54 @@ def test_science_topic_html_replace_keeps_cover(dynamodb_table, admin_headers, m
     assert not body.get("image_put_url")
     assert "cover.png" in (body.get("image_url") or "")
     assert body.get("html_put_url")
+
+
+@pytest.mark.unit
+def test_lesson_topic_other_stem_category(dynamodb_table, admin_headers, user_headers, monkeypatch):
+    _s3_env(monkeypatch)
+    resp = handler(
+        make_event(
+            "POST",
+            "/science/topics",
+            headers=admin_headers,
+            body=_start_body(
+                category="Engineering",
+                topic="Simple Machines",
+                summary="Levers help us lift.",
+                image_ext="png",
+                image_content_type="image/png",
+            ),
+        )
+    )
+    assert resp["statusCode"] == 201, resp["body"]
+    started = json.loads(resp["body"])
+    assert started["subject_id"] == "engineering-simple-machines"
+    assert started["category"] == "Engineering"
+    assert "engineering/engineering-simple-machines/cover.png" in (
+        started.get("image_url") or ""
+    )
+    done = handler(
+        make_event(
+            "POST",
+            "/science/topics/engineering-simple-machines/complete",
+            headers=admin_headers,
+        )
+    )
+    assert done["statusCode"] == 200, done["body"]
+    listed = handler(make_event("GET", "/science/topics", headers=user_headers))
+    topics = json.loads(listed["body"])["topics"]
+    assert any(t["subject_id"] == "engineering-simple-machines" for t in topics)
+    detail = handler(
+        make_event(
+            "GET",
+            "/science/topics/engineering-simple-machines",
+            headers=user_headers,
+        )
+    )
+    assert detail["statusCode"] == 200
+    body = json.loads(detail["body"])
+    assert body["category"] == "Engineering"
+    assert body["science_ready"] is True
 
 
 @pytest.mark.unit

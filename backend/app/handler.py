@@ -796,7 +796,7 @@ def _route(
         try:
             return ok(science_service.complete_topic_upload(sid))
         except SubjectNotFound:
-            return not_found("Science topic not found")
+            return not_found("Topic not found")
         except ScienceError as exc:
             return bad_request(str(exc))
 
@@ -806,7 +806,7 @@ def _route(
         try:
             return ok(science_service.get_science_topic(sid))
         except SubjectNotFound:
-            return not_found("Science topic not found")
+            return not_found("Topic not found")
 
     # --- Technology presentation topics ---
     if method == "GET" and path == "/technology/topics":

@@ -350,6 +350,10 @@ class StemStack(Stack):
             frontend_bucket.grant_read(fn, "technology/*")
             frontend_bucket.grant_put(fn, "science/*")
             frontend_bucket.grant_read(fn, "science/*")
+            frontend_bucket.grant_put(fn, "engineering/*")
+            frontend_bucket.grant_read(fn, "engineering/*")
+            frontend_bucket.grant_put(fn, "mathematics/*")
+            frontend_bucket.grant_read(fn, "mathematics/*")
         return fn
 
     def _create_http_api(

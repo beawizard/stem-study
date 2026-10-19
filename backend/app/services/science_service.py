@@ -20,10 +20,22 @@ from app.services.subject_service import (
     update_subject,
     _public_subject,
 )
-from app.validation import MAX_DESC_LEN, SubjectCreate, SubjectUpdate, ScienceTopicCreate
+from app.validation import (
+    MAX_DESC_LEN,
+    STEM_CATEGORIES,
+    SubjectCreate,
+    SubjectUpdate,
+    ScienceTopicCreate,
+)
 
 ALLOWED_IMAGE_EXT = {"jpg", "jpeg", "png", "webp", "gif", "bmp"}
 ALLOWED_HTML_EXT = {"html", "htm"}
+_S3_PREFIX = {
+    "Science": "science",
+    "Technology": "technology",
+    "Engineering": "engineering",
+    "Mathematics": "mathematics",
+}
 
 
 class ScienceError(Exception):
@@ -67,18 +79,32 @@ def _object_url(key: str) -> str:
     return f"{_public_base()}/{quote(key)}"
 
 
-def _cover_key(subject_id: str, image_ext: str) -> str:
-    return f"science/{subject_id}/cover.{image_ext}"
+def _s3_prefix(category: str) -> str:
+    return _S3_PREFIX.get(category, "science")
 
 
-def _html_key(subject_id: str) -> str:
-    return f"science/{subject_id}/interactive.html"
+def _cover_key(category: str, subject_id: str, image_ext: str) -> str:
+    return f"{_s3_prefix(category)}/{subject_id}/cover.{image_ext}"
+
+
+def _html_key(category: str, subject_id: str) -> str:
+    return f"{_s3_prefix(category)}/{subject_id}/interactive.html"
+
+
+def is_lesson_topic(item: dict[str, Any]) -> bool:
+    kind = (item.get("content_kind") or "").strip()
+    if kind in ("science", "lesson"):
+        return True
+    return bool(item.get("science_ready"))
 
 
 def start_topic_upload(data: ScienceTopicCreate, *, admin_user_id: str) -> dict[str, Any]:
-    """Create/replace a Science topic and optionally return a presigned image PUT."""
+    """Create/replace a STEM lesson topic and optionally return presigned PUTs."""
+    category = (data.category or "Science").strip() or "Science"
+    if category not in STEM_CATEGORIES:
+        raise ScienceError(f"category must be one of: {', '.join(STEM_CATEGORIES)}")
     topic = data.topic.strip()
-    subject_id = slugify_subject_id("Science", topic)
+    subject_id = slugify_subject_id(category, topic)
     pk = keys.subject_pk(subject_id)
     existing = db.get_item(pk, keys.subject_meta_sk())
     live = bool(existing and not existing.get("deleted_at"))
@@ -95,7 +121,7 @@ def start_topic_upload(data: ScienceTopicCreate, *, admin_user_id: str) -> dict[
         update_subject(
             subject_id,
             SubjectUpdate(
-                category="Science",
+                category=category,
                 topic=topic,
                 description=desc or existing.get("description") or "",
                 grade_level=data.grade_level,
@@ -104,7 +130,7 @@ def start_topic_upload(data: ScienceTopicCreate, *, admin_user_id: str) -> dict[
     else:
         create_subject(
             SubjectCreate(
-                category="Science",
+                category=category,
                 topic=topic,
                 subject_id=subject_id,
                 description=desc,
@@ -135,7 +161,7 @@ def start_topic_upload(data: ScienceTopicCreate, *, admin_user_id: str) -> dict[
 
     if has_image:
         img_ext = _safe_ext(data.image_ext, ALLOWED_IMAGE_EXT, "jpg")
-        image_key = _cover_key(subject_id, img_ext)
+        image_key = _cover_key(category, subject_id, img_ext)
         image_url = _object_url(image_key)
         image_put_url = s3.generate_presigned_url(
             "put_object",
@@ -151,7 +177,7 @@ def start_topic_upload(data: ScienceTopicCreate, *, admin_user_id: str) -> dict[
         html_ext = _safe_ext(data.html_ext, ALLOWED_HTML_EXT, "html")
         if html_ext not in ALLOWED_HTML_EXT:
             raise ScienceError("Interactive HTML must be a .html file")
-        html_key = _html_key(subject_id)
+        html_key = _html_key(category, subject_id)
         html_url = _object_url(html_key)
         html_put_url = s3.generate_presigned_url(
             "put_object",
@@ -168,7 +194,7 @@ def start_topic_upload(data: ScienceTopicCreate, *, admin_user_id: str) -> dict[
         pk,
         keys.subject_meta_sk(),
         {
-            "content_kind": "science",
+            "content_kind": "lesson",
             "science_ready": False,
             "summary": summary,
             "explainer_video_url": video,
@@ -194,8 +220,11 @@ def start_topic_upload(data: ScienceTopicCreate, *, admin_user_id: str) -> dict[
 
 def complete_topic_upload(subject_id: str) -> dict[str, Any]:
     item = get_subject(subject_id)
-    if (item.get("category") or "") != "Science":
-        raise ScienceError("Not a Science topic")
+    kind = (item.get("content_kind") or "").strip()
+    if kind not in ("science", "lesson"):
+        raise ScienceError("Not an uploaded lesson topic")
+    if (item.get("category") or "") not in STEM_CATEGORIES:
+        raise ScienceError("Not an uploaded lesson topic")
     updated = db.update_item(
         keys.subject_pk(subject_id),
         keys.subject_meta_sk(),
@@ -218,7 +247,7 @@ def public_science_topic(item: dict[str, Any]) -> dict[str, Any]:
     base = _public_subject(item)
     base.update(
         {
-            "content_kind": item.get("content_kind") or "science",
+            "content_kind": item.get("content_kind") or "lesson",
             "science_ready": bool(item.get("science_ready")),
             "summary": (
                 item["summary"]
@@ -236,8 +265,10 @@ def public_science_topic(item: dict[str, Any]) -> dict[str, Any]:
 
 def get_science_topic(subject_id: str) -> dict[str, Any]:
     item = get_subject(subject_id)
-    if (item.get("category") or "") != "Science":
-        raise SubjectNotFound(f"Science topic '{subject_id}' not found")
+    if (item.get("category") or "") not in STEM_CATEGORIES:
+        raise SubjectNotFound(f"Lesson topic '{subject_id}' not found")
+    if not is_lesson_topic(item):
+        raise SubjectNotFound(f"Lesson topic '{subject_id}' not found")
     return public_science_topic(item)
 
 
@@ -246,7 +277,9 @@ def list_science_topics() -> list[dict[str, Any]]:
 
     rows = []
     for s in list_subjects():
-        if (s.get("category") or "") != "Science":
+        if (s.get("category") or "") not in STEM_CATEGORIES:
             continue
-        rows.append(s)
+        kind = (s.get("content_kind") or "").strip()
+        if kind in ("science", "lesson") or s.get("science_ready"):
+            rows.append(s)
     return rows

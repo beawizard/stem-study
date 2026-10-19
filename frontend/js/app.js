@@ -23,8 +23,9 @@ const App = (() => {
     // Admin content management (no GCash)
     adminSubjectId: null,
     adminLevelId: null,
+    adminUploadCategory: "Science",
     // Study page subject pickers (Category + Topic, same model as Admin)
-    studyView: "hub", // hub (STEM tiles) | math | tech | sci
+    studyView: "hub", // hub (STEM tiles) | math | tech | sci | eng
     studyCategory: null,
     studySubjectId: null,
     studyFocusLevelId: null, // deep-link from Insights level link
@@ -969,6 +970,16 @@ const App = (() => {
     return opts.join("");
   }
 
+  const STEM_CATEGORIES = ["Science", "Technology", "Engineering", "Mathematics"];
+
+  function isLessonSubject(s) {
+    if (!s) return false;
+    const kind = s.content_kind || "";
+    if (kind === "presentation") return false;
+    if (kind === "science" || kind === "lesson") return true;
+    return Boolean(s.science_ready);
+  }
+
   /** Fixed grade levels for Sign up and Profile comboboxes (order fixed). */
   const GRADE_LEVELS = [
     "Kindergarten",
@@ -1610,14 +1621,19 @@ const App = (() => {
 
   async function viewStudyHub() {
     let scienceEnabled = false;
+    let engineeringEnabled = false;
     try {
       const data = await StudyCache.loadStudyData(token(), null);
       const subjects = data.subjects || [];
       scienceEnabled = subjects.some(
         (s) => (s.category || "") === "Science" && s.science_ready
       );
+      engineeringEnabled = subjects.some(
+        (s) => (s.category || "") === "Engineering" && s.science_ready
+      );
     } catch (_) {
       scienceEnabled = false;
+      engineeringEnabled = false;
     }
     const tiles = [
       {
@@ -1636,7 +1652,7 @@ const App = (() => {
         id: "Engineering",
         title: "Engineering",
         blurb: "Design and build solutions.",
-        enabled: false,
+        enabled: engineeringEnabled,
       },
       {
         id: "Mathematics",
@@ -1737,12 +1753,19 @@ const App = (() => {
       } catch (err) {
         readerHtml = `<p class="muted">${escapeHtml(err.message || "Could not load presentation.")}</p>`;
       }
+    } else if (selected && isLessonSubject(selected)) {
+      try {
+        const detail = await Api.getScienceTopic(tok, selected.subject_id);
+        readerHtml = scienceReaderHtml(detail);
+      } catch (err) {
+        readerHtml = `<p class="muted">${escapeHtml(err.message || "Could not load this topic.")}</p>`;
+      }
     } else if (selected) {
       readerHtml = `<p class="muted study-topic-desc">${escapeHtml(
         selected.description || selected.topic || ""
       )}</p>`;
     } else {
-      readerHtml = `<p class="muted study-topic-desc">Select a Technology topic. Presentations appear as a picture book with audio and subtitles.</p>`;
+      readerHtml = `<p class="muted study-topic-desc">Select a Technology topic. Presentations appear as a picture book with audio and subtitles. Uploaded lessons show a summary, image, interactive HTML, and video.</p>`;
     }
     return `
       <div class="card study-landing-card tech-landing-card">
@@ -1759,6 +1782,10 @@ const App = (() => {
   }
 
   async function viewStudyScience() {
+    return viewStudyLesson("Science");
+  }
+
+  async function viewStudyLesson(category) {
     const tok = token();
     let allSubjects = [];
     try {
@@ -1767,16 +1794,16 @@ const App = (() => {
     } catch (e) {
       return `<div class="card">
         <button type="button" class="btn secondary btn-sm" data-study-hub>← Study</button>
-        <h1>Science</h1>
+        <h1>${escapeHtml(category)}</h1>
         <p class="muted">${escapeHtml(e.message || "Could not load topics.")}</p>
       </div>`;
     }
 
     const sciSubjects = allSubjects.filter(
-      (s) => (s.category || "") === "Science" && s.science_ready
+      (s) => (s.category || "") === category && s.science_ready
     );
-    if (!state.studyCategory || state.studyCategory !== "Science") {
-      state.studyCategory = "Science";
+    if (!state.studyCategory || state.studyCategory !== category) {
+      state.studyCategory = category;
     }
     const topics = sciSubjects.slice().sort((a, b) =>
       String(a.topic || a.name || "").localeCompare(
@@ -1812,12 +1839,14 @@ const App = (() => {
         readerHtml = `<p class="muted">${escapeHtml(err.message || "Could not load this topic.")}</p>`;
       }
     } else {
-      readerHtml = `<p class="muted study-topic-desc">Select a Science topic to read the summary, open the interactive lesson, and follow the explainer video.</p>`;
+      readerHtml = `<p class="muted study-topic-desc">Select a ${escapeHtml(
+        category
+      )} topic to read the summary, open the interactive lesson, and follow the explainer video.</p>`;
     }
     return `
       <div class="card study-landing-card sci-landing-card">
         <button type="button" class="btn secondary btn-sm" data-study-hub>← Study</button>
-        <h1 class="study-page-title" style="margin-top:0.5rem">Science</h1>
+        <h1 class="study-page-title" style="margin-top:0.5rem">${escapeHtml(category)}</h1>
         <div class="study-pickers study-pickers-stacked" style="max-width:22rem;margin-top:0.75rem">
           <div class="study-picker-field">
             <label for="study-topic">Topic</label>
@@ -1953,7 +1982,13 @@ const App = (() => {
       if (state.studyFocusLevelId && state.studyView === "hub") {
         const cat = state.studyCategory || "Mathematics";
         state.studyView =
-          cat === "Technology" ? "tech" : cat === "Science" ? "sci" : "math";
+          cat === "Technology"
+            ? "tech"
+            : cat === "Science"
+              ? "sci"
+              : cat === "Engineering"
+                ? "eng"
+                : "math";
       }
 
       if (!state.studyView || state.studyView === "hub") {
@@ -1964,6 +1999,9 @@ const App = (() => {
       }
       if (state.studyView === "sci") {
         return viewStudyScience();
+      }
+      if (state.studyView === "eng") {
+        return viewStudyLesson("Engineering");
       }
 
       const tok = token();
@@ -2038,6 +2076,56 @@ const App = (() => {
       const selected =
         topicsInCategory.find((s) => s.subject_id === state.studySubjectId) ||
         null;
+
+      if (selected && isLessonSubject(selected)) {
+        const topicOptions = topicsInCategory.length
+          ? topicsInCategory
+              .map(
+                (s) =>
+                  `<option value="${escapeAttr(s.subject_id)}" ${
+                    s.subject_id === state.studySubjectId ? "selected" : ""
+                  }>${escapeHtml(s.topic || s.name || s.subject_id)}</option>`
+              )
+              .join("")
+          : `<option value="">No topics in this category</option>`;
+        let readerHtml = "";
+        try {
+          const detail = await Api.getScienceTopic(tok, selected.subject_id);
+          readerHtml = scienceReaderHtml(detail);
+        } catch (err) {
+          readerHtml = `<p class="muted">${escapeHtml(err.message || "Could not load this topic.")}</p>`;
+        }
+        const gradeLabel = selected.grade_level
+          ? String(selected.grade_level).trim()
+          : "";
+        return `
+        <div class="card study-landing-card">
+          <button type="button" class="btn secondary btn-sm" data-study-hub>← Study</button>
+          <div class="study-header" style="margin-top:0.5rem">
+            <div class="study-header-main">
+              <div class="study-title-row">
+                <h1 class="study-page-title">${escapeHtml(
+                  state.studyCategory || "Mathematics"
+                )}</h1>
+                ${
+                  gradeLabel
+                    ? `<div class="study-grade-badge" title="Content grade level">${escapeHtml(
+                        gradeLabel
+                      )}</div>`
+                    : ""
+                }
+              </div>
+            </div>
+          </div>
+          <div class="study-pickers study-pickers-stacked" style="max-width:22rem;margin-top:0.75rem">
+            <div class="study-picker-field">
+              <label for="study-topic">Topic</label>
+              <select id="study-topic">${topicOptions}</select>
+            </div>
+          </div>
+          ${readerHtml}
+        </div>`;
+      }
 
       // Landing: use bootstrap result or cache; fetch only if topic differs
       let levels = [];
@@ -3475,9 +3563,18 @@ const App = (() => {
       </div>
 
       <div class="card">
-        <h2>Science topics</h2>
-        <p class="muted">Add a Science topic. Summary and cover image are optional. You can upload a self-contained interactive HTML lesson for learners to use on the Study page.</p>
+        <h2>Upload Topics</h2>
+        <p class="muted">Upload a topic for Science, Technology, Engineering, or Mathematics. Summary and cover image are optional. You can attach a self-contained interactive HTML lesson for learners to use on the Study page.</p>
         <form id="admin-sci-form" class="stack">
+          <div>
+            <label for="sci-category">Category</label>
+            <select id="sci-category">
+              ${STEM_CATEGORIES.map((c) => {
+                const sel = (state.adminUploadCategory || "Science") === c;
+                return `<option value="${escapeAttr(c)}" ${sel ? "selected" : ""}>${escapeHtml(c)}</option>`;
+              }).join("")}
+            </select>
+          </div>
           <div class="row">
             <div class="grow">
               <label for="sci-topic-select">Topic</label>
@@ -3485,7 +3582,12 @@ const App = (() => {
                 <option value="">＋ New topic…</option>
                 ${
                   (subjects || [])
-                    .filter((s) => (s.category || "") === "Science")
+                    .filter(
+                      (s) =>
+                        (s.category || "") ===
+                          (state.adminUploadCategory || "Science") &&
+                        isLessonSubject(s)
+                    )
                     .map(
                       (s) =>
                         `<option value="${escapeAttr(s.topic || s.name || "")}">${escapeHtml(
@@ -3528,7 +3630,7 @@ const App = (() => {
             <input type="checkbox" id="sci-replace" />
             Replace this topic if it already exists
           </label>
-          <button class="btn accent" type="submit" id="admin-sci-submit">Save Science topic</button>
+          <button class="btn accent" type="submit" id="admin-sci-submit">Save topic</button>
           <div id="sci-import-log" class="muted import-log hidden"></div>
         </form>
       </div>
@@ -7073,11 +7175,19 @@ const App = (() => {
       };
     }
 
+    const sciCategory = document.getElementById("sci-category");
+    if (sciCategory) {
+      sciCategory.onchange = () => {
+        state.adminUploadCategory = sciCategory.value || "Science";
+        render();
+      };
+    }
     const sciTopicSelect = document.getElementById("sci-topic-select");
     const sciTopicName = document.getElementById("sci-topic-name");
     if (sciTopicSelect) {
       sciTopicSelect.onchange = () => {
         const v = sciTopicSelect.value || "";
+        const cat = state.adminUploadCategory || "Science";
         const summaryEl = document.getElementById("sci-summary");
         const videoEl = document.getElementById("sci-video");
         const gradeEl = document.getElementById("sci-grade-level");
@@ -7095,8 +7205,9 @@ const App = (() => {
         if (sciTopicName) sciTopicName.value = v;
         const found = (state._adminSubjects || []).find(
           (s) =>
-            (s.category || "") === "Science" &&
-            (s.topic || s.name || "") === v
+            (s.category || "") === cat &&
+            (s.topic || s.name || "") === v &&
+            isLessonSubject(s)
         );
         if (found) {
           if (gradeEl && found.grade_level) gradeEl.value = found.grade_level;
@@ -7114,6 +7225,11 @@ const App = (() => {
     if (sciForm) {
       sciForm.onsubmit = async (e) => {
         e.preventDefault();
+        const category = (
+          document.getElementById("sci-category")?.value ||
+          state.adminUploadCategory ||
+          "Science"
+        ).trim();
         const topic = (document.getElementById("sci-topic-name")?.value || "").trim();
         const grade = (document.getElementById("sci-grade-level")?.value || "").trim();
         const summary = (document.getElementById("sci-summary")?.value || "").trim();
@@ -7125,6 +7241,10 @@ const App = (() => {
         const replace = Boolean(document.getElementById("sci-replace")?.checked);
         const logEl = document.getElementById("sci-import-log");
         const submitBtn = document.getElementById("admin-sci-submit");
+        if (!category) {
+          toast("Select a category.", true);
+          return;
+        }
         if (!topic) {
           toast("Enter a topic name.", true);
           return;
@@ -7149,10 +7269,11 @@ const App = (() => {
         };
         if (logEl) {
           logEl.classList.remove("hidden");
-          logEl.textContent = "Saving Science topic…";
+          logEl.textContent = "Saving topic…";
         }
         try {
           const body = {
+            category,
             topic,
             grade_level: grade || null,
             summary,
@@ -7187,7 +7308,8 @@ const App = (() => {
             );
           }
           await Api.completeScienceTopic(token(), started.subject_id);
-          toast(`Science topic “${topic}” is ready`);
+          state.adminUploadCategory = category;
+          toast(`${category} topic “${topic}” is ready`);
           StudyCache.invalidateAll();
           render();
         } catch (err) {
@@ -7868,7 +7990,9 @@ const App = (() => {
             ? "tech"
             : category === "Science"
               ? "sci"
-              : "math";
+              : category === "Engineering"
+                ? "eng"
+                : "math";
         navigate("study");
       };
     });
@@ -7905,6 +8029,10 @@ const App = (() => {
         } else if (stem === "Science") {
           state.studyView = "sci";
           state.studyCategory = "Science";
+          state.studySubjectId = null;
+        } else if (stem === "Engineering") {
+          state.studyView = "eng";
+          state.studyCategory = "Engineering";
           state.studySubjectId = null;
         } else {
           return;

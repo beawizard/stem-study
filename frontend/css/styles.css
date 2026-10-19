@@ -1784,6 +1784,7 @@ body.admin-mode .usage-wrap.table-wrap {
 .stem-tile-mathematics { border-color: #5eead4; }
 .stem-tile-technology { border-color: #7dd3fc; }
 .stem-tile-science { border-color: #86efac; }
+.stem-tile-engineering { border-color: #fcd34d; }
 
 .sci-summary-input {
   min-height: 10.5rem;

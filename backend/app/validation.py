@@ -395,10 +395,11 @@ class TechnologyPageSpec(BaseModel):
 
 
 class ScienceTopicCreate(BaseModel):
-    """POST /science/topics — admin creates a Science topic (optional summary/cover/html + video)."""
+    """POST /science/topics — admin uploads a STEM lesson topic (any STEM category)."""
 
     model_config = ConfigDict(str_strip_whitespace=True, extra="forbid")
 
+    category: str = Field(default="Science", min_length=1, max_length=32)
     topic: str = Field(..., min_length=1, max_length=100)
     grade_level: str | None = Field(default=None, max_length=32)
     summary: str = Field(default="", max_length=MAX_SUMMARY_LEN)
@@ -408,6 +409,15 @@ class ScienceTopicCreate(BaseModel):
     html_ext: str = Field(default="", max_length=8)
     html_content_type: str = Field(default="", max_length=80)
     replace: bool = False
+
+    @field_validator("category")
+    @classmethod
+    def validate_category(cls, v: str) -> str:
+        raw = (v or "Science").strip()
+        for cat in STEM_CATEGORIES:
+            if raw.lower() == cat.lower():
+                return cat
+        raise ValueError(f"category must be one of: {', '.join(STEM_CATEGORIES)}")
 
     @field_validator("grade_level")
     @classmethod
