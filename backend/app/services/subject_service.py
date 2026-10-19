@@ -769,6 +769,9 @@ def _public_subject(item: dict[str, Any]) -> dict[str, Any]:
         "summary": item.get("summary") or "",
         "explainer_video_url": item.get("explainer_video_url") or "",
         "image_url": item.get("image_url") or "",
+        "interactive_html_url": item.get("html_url")
+        or item.get("interactive_html_url")
+        or "",
         "created_at": item.get("created_at"),
     }
 

@@ -1,4 +1,4 @@
-"""Science topics — summary, cover image, and explainer video URL."""
+"""Science topics — optional summary/cover, interactive HTML, explainer video URL."""
 
 from __future__ import annotations
 
@@ -23,6 +23,7 @@ from app.services.subject_service import (
 from app.validation import MAX_DESC_LEN, SubjectCreate, SubjectUpdate, ScienceTopicCreate
 
 ALLOWED_IMAGE_EXT = {"jpg", "jpeg", "png", "webp", "gif", "bmp"}
+ALLOWED_HTML_EXT = {"html", "htm"}
 
 
 class ScienceError(Exception):
@@ -70,6 +71,10 @@ def _cover_key(subject_id: str, image_ext: str) -> str:
     return f"science/{subject_id}/cover.{image_ext}"
 
 
+def _html_key(subject_id: str) -> str:
+    return f"science/{subject_id}/interactive.html"
+
+
 def start_topic_upload(data: ScienceTopicCreate, *, admin_user_id: str) -> dict[str, Any]:
     """Create/replace a Science topic and optionally return a presigned image PUT."""
     topic = data.topic.strip()
@@ -114,12 +119,24 @@ def start_topic_upload(data: ScienceTopicCreate, *, admin_user_id: str) -> dict[
     image_put_url = ""
     image_ct = (data.image_content_type or "").strip() or "image/jpeg"
 
+    has_html = bool((data.html_ext or "").strip())
+    html_key = (existing or {}).get("html_key") or ""
+    html_url = (existing or {}).get("html_url") or (existing or {}).get(
+        "interactive_html_url"
+    ) or ""
+    html_put_url = ""
+    html_ct = (data.html_content_type or "").strip() or "text/html"
+
+    s3 = None
+    bucket = ""
+    if has_image or has_html:
+        s3 = _s3()
+        bucket = _bucket()
+
     if has_image:
         img_ext = _safe_ext(data.image_ext, ALLOWED_IMAGE_EXT, "jpg")
         image_key = _cover_key(subject_id, img_ext)
         image_url = _object_url(image_key)
-        s3 = _s3()
-        bucket = _bucket()
         image_put_url = s3.generate_presigned_url(
             "put_object",
             Params={
@@ -129,8 +146,22 @@ def start_topic_upload(data: ScienceTopicCreate, *, admin_user_id: str) -> dict[
             },
             ExpiresIn=3600,
         )
-    elif not image_key:
-        raise ScienceError("Cover image is required")
+
+    if has_html:
+        html_ext = _safe_ext(data.html_ext, ALLOWED_HTML_EXT, "html")
+        if html_ext not in ALLOWED_HTML_EXT:
+            raise ScienceError("Interactive HTML must be a .html file")
+        html_key = _html_key(subject_id)
+        html_url = _object_url(html_key)
+        html_put_url = s3.generate_presigned_url(
+            "put_object",
+            Params={
+                "Bucket": bucket,
+                "Key": html_key,
+                "ContentType": html_ct,
+            },
+            ExpiresIn=3600,
+        )
 
     now = _utcnow_iso()
     db.update_item(
@@ -143,6 +174,8 @@ def start_topic_upload(data: ScienceTopicCreate, *, admin_user_id: str) -> dict[
             "explainer_video_url": video,
             "image_key": image_key,
             "image_url": image_url,
+            "html_key": html_key,
+            "html_url": html_url,
             "grade_level": data.grade_level or "",
             "uploaded_by": admin_user_id,
             "updated_at": now,
@@ -154,6 +187,8 @@ def start_topic_upload(data: ScienceTopicCreate, *, admin_user_id: str) -> dict[
         "subject_id": subject_id,
         "image_put_url": image_put_url,
         "image_content_type": image_ct if image_put_url else "",
+        "html_put_url": html_put_url,
+        "html_content_type": html_ct if html_put_url else "",
     }
 
 
@@ -174,14 +209,26 @@ def complete_topic_upload(subject_id: str) -> dict[str, Any]:
 
 def public_science_topic(item: dict[str, Any]) -> dict[str, Any]:
     img_key = item.get("image_key") or ""
+    html_key = item.get("html_key") or ""
+    html_url = (
+        item.get("html_url")
+        or item.get("interactive_html_url")
+        or (_object_url(html_key) if html_key else "")
+    )
     base = _public_subject(item)
     base.update(
         {
             "content_kind": item.get("content_kind") or "science",
             "science_ready": bool(item.get("science_ready")),
-            "summary": item.get("summary") or item.get("description") or "",
+            "summary": (
+                item["summary"]
+                if "summary" in item
+                else (item.get("description") or "")
+            )
+            or "",
             "explainer_video_url": item.get("explainer_video_url") or "",
             "image_url": item.get("image_url") or (_object_url(img_key) if img_key else ""),
+            "interactive_html_url": html_url,
         }
     )
     return base

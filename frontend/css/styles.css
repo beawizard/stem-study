@@ -1824,6 +1824,24 @@ body.admin-mode .usage-wrap.table-wrap {
   width: 100%;
   height: auto;
 }
+.sci-interactive-wrap {
+  display: flex;
+  flex-direction: column;
+  gap: 0.45rem;
+}
+.sci-interactive-label {
+  font-size: 0.85rem;
+  font-weight: 700;
+}
+.sci-interactive {
+  display: block;
+  width: 100%;
+  min-height: 70vh;
+  height: 80vh;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: #fff;
+}
 .sci-video-wrap,
 .sci-video-field {
   margin: 0.15rem 0 0;

@@ -395,7 +395,7 @@ class TechnologyPageSpec(BaseModel):
 
 
 class ScienceTopicCreate(BaseModel):
-    """POST /science/topics — admin creates a Science topic (summary + cover + video)."""
+    """POST /science/topics — admin creates a Science topic (optional summary/cover/html + video)."""
 
     model_config = ConfigDict(str_strip_whitespace=True, extra="forbid")
 
@@ -405,6 +405,8 @@ class ScienceTopicCreate(BaseModel):
     explainer_video_url: str = Field(default="", max_length=MAX_VIDEO_URL_LEN)
     image_ext: str = Field(default="", max_length=8)
     image_content_type: str = Field(default="", max_length=80)
+    html_ext: str = Field(default="", max_length=8)
+    html_content_type: str = Field(default="", max_length=80)
     replace: bool = False
 
     @field_validator("grade_level")

@@ -1812,7 +1812,7 @@ const App = (() => {
         readerHtml = `<p class="muted">${escapeHtml(err.message || "Could not load this topic.")}</p>`;
       }
     } else {
-      readerHtml = `<p class="muted study-topic-desc">Select a Science topic to read the summary, see the cover image, and open the explainer video.</p>`;
+      readerHtml = `<p class="muted study-topic-desc">Select a Science topic to read the summary, open the interactive lesson, and follow the explainer video.</p>`;
     }
     return `
       <div class="card study-landing-card sci-landing-card">
@@ -1832,12 +1832,24 @@ const App = (() => {
     const grade = detail.grade_level
       ? `<span class="study-grade-badge">${escapeHtml(detail.grade_level)}</span>`
       : "";
-    const summaryHtml = formatScienceSummary(detail.summary || detail.description || "");
+    const summary = String(detail.summary || detail.description || "").trim();
+    const summaryHtml = summary
+      ? `<div class="sci-summary">${formatScienceSummary(summary)}</div>`
+      : "";
     const imageHtml = detail.image_url
       ? `<div class="sci-cover"><img src="${escapeAttr(detail.image_url)}" alt="${escapeAttr(
           detail.topic || detail.name || "Science topic"
         )}" /></div>`
-      : `<p class="muted">No cover image for this topic.</p>`;
+      : "";
+    const htmlUrl = (detail.interactive_html_url || "").trim();
+    const interactiveHtml = htmlUrl
+      ? `<div class="sci-interactive-wrap">
+          <span class="sci-interactive-label">Interactive lesson</span>
+          <iframe class="sci-interactive" title="${escapeAttr(
+            detail.topic || detail.name || "Interactive lesson"
+          )}" src="${escapeAttr(htmlUrl)}" sandbox="allow-scripts allow-forms allow-modals allow-popups allow-popups-to-escape-sandbox" loading="lazy"></iframe>
+        </div>`
+      : "";
     const video = (detail.explainer_video_url || "").trim();
     const videoHtml = video
       ? `<div class="sci-video-wrap">
@@ -1846,22 +1858,28 @@ const App = (() => {
             video
           )}</a>
         </div>`
-      : `<p class="muted">No explainer video for this topic.</p>`;
+      : "";
+    const emptyHtml =
+      summaryHtml || imageHtml || interactiveHtml || videoHtml
+        ? ""
+        : `<p class="muted">This topic has no summary, image, interactive lesson, or video yet.</p>`;
     return `
       <div class="sci-reader">
         <div class="sci-reader-meta">
           <strong>${escapeHtml(detail.topic || detail.name || "Topic")}</strong>
           ${grade}
         </div>
-        <div class="sci-summary">${summaryHtml}</div>
+        ${summaryHtml}
         ${imageHtml}
+        ${interactiveHtml}
         ${videoHtml}
+        ${emptyHtml}
       </div>`;
   }
 
   function formatScienceSummary(text) {
     const t = String(text || "").trim();
-    if (!t) return `<p class="muted">No summary yet.</p>`;
+    if (!t) return "";
     return t
       .split(/\n+/)
       .map((p) => `<p>${escapeHtml(p)}</p>`)
@@ -3458,7 +3476,7 @@ const App = (() => {
 
       <div class="card">
         <h2>Science topics</h2>
-        <p class="muted">Add a Science topic with a summary, cover image, and explainer video URL. Learners pick the topic on the Study page.</p>
+        <p class="muted">Add a Science topic. Summary and cover image are optional. You can upload a self-contained interactive HTML lesson for learners to use on the Study page.</p>
         <form id="admin-sci-form" class="stack">
           <div class="row">
             <div class="grow">
@@ -3490,12 +3508,17 @@ const App = (() => {
           <div>
             <label for="sci-summary">Summary</label>
             <textarea id="sci-summary" class="sci-summary-input" maxlength="4000" rows="8"
-              placeholder="Write 5–10 sentences learners will read for this topic."></textarea>
+              placeholder="Optional. Write 5–10 sentences learners will read for this topic."></textarea>
           </div>
           <div>
             <label for="sci-image">Cover image</label>
             <input id="sci-image" type="file" accept="image/png,image/jpeg,image/jpg,image/webp,image/gif,image/bmp,.png,.jpg,.jpeg,.webp,.gif,.bmp" />
-            <p class="muted" style="margin:0.35rem 0 0">PNG, JPEG, WebP, GIF, or other image. Required for a new topic; optional when replacing an existing one.</p>
+            <p class="muted" style="margin:0.35rem 0 0">Optional. PNG, JPEG, WebP, GIF, or other image.</p>
+          </div>
+          <div>
+            <label for="sci-html">Interactive HTML</label>
+            <input id="sci-html" type="file" accept=".html,.htm,text/html" />
+            <p class="muted" id="sci-html-hint" style="margin:0.35rem 0 0">Optional. Upload a self-contained .html lesson (example: microplastics interactive).</p>
           </div>
           <div class="sci-video-field">
             <label for="sci-video">Explainer video</label>
@@ -7058,10 +7081,15 @@ const App = (() => {
         const summaryEl = document.getElementById("sci-summary");
         const videoEl = document.getElementById("sci-video");
         const gradeEl = document.getElementById("sci-grade-level");
+        const htmlHint = document.getElementById("sci-html-hint");
         if (!v) {
           if (sciTopicName) sciTopicName.value = "";
           if (summaryEl) summaryEl.value = "";
           if (videoEl) videoEl.value = "";
+          if (htmlHint) {
+            htmlHint.textContent =
+              "Optional. Upload a self-contained .html lesson (example: microplastics interactive).";
+          }
           return;
         }
         if (sciTopicName) sciTopicName.value = v;
@@ -7074,6 +7102,11 @@ const App = (() => {
           if (gradeEl && found.grade_level) gradeEl.value = found.grade_level;
           if (summaryEl) summaryEl.value = found.summary || found.description || "";
           if (videoEl) videoEl.value = found.explainer_video_url || "";
+          if (htmlHint) {
+            htmlHint.textContent = found.interactive_html_url
+              ? "This topic already has interactive HTML. Choose a file to replace it."
+              : "Optional. Upload a self-contained .html lesson (example: microplastics interactive).";
+          }
         }
       };
     }
@@ -7087,6 +7120,8 @@ const App = (() => {
         const video = (document.getElementById("sci-video")?.value || "").trim();
         const imageInput = document.getElementById("sci-image");
         const file = imageInput && imageInput.files && imageInput.files[0];
+        const htmlInput = document.getElementById("sci-html");
+        const htmlFile = htmlInput && htmlInput.files && htmlInput.files[0];
         const replace = Boolean(document.getElementById("sci-replace")?.checked);
         const logEl = document.getElementById("sci-import-log");
         const submitBtn = document.getElementById("admin-sci-submit");
@@ -7094,20 +7129,12 @@ const App = (() => {
           toast("Enter a topic name.", true);
           return;
         }
-        const existing = (state._adminSubjects || []).find(
-          (s) =>
-            (s.category || "") === "Science" &&
-            (s.topic || s.name || "") === topic
-        );
-        const hasExistingImage = Boolean(
-          existing && (existing.image_url || existing.science_ready)
-        );
         if (file && !isScienceImageFile(file)) {
           toast("Choose an image file (PNG, JPEG, WebP, GIF, or similar).", true);
           return;
         }
-        if (!file && !hasExistingImage) {
-          toast("Choose a cover image for this Science topic.", true);
+        if (htmlFile && !isScienceHtmlFile(htmlFile)) {
+          toast("Choose an HTML file (.html or .htm).", true);
           return;
         }
         if (video && !/^https?:\/\//i.test(video)) {
@@ -7137,6 +7164,11 @@ const App = (() => {
             body.image_ext = ext;
             body.image_content_type = file.type || guessTechMime(ext);
           }
+          if (htmlFile) {
+            const ext = (htmlFile.name.split(".").pop() || "html").toLowerCase();
+            body.html_ext = ext;
+            body.html_content_type = htmlFile.type || "text/html";
+          }
           const started = await Api.startScienceTopic(token(), body);
           if (file && started.image_put_url) {
             log("Uploading cover image…");
@@ -7144,6 +7176,14 @@ const App = (() => {
               started.image_put_url,
               file,
               started.image_content_type || file.type
+            );
+          }
+          if (htmlFile && started.html_put_url) {
+            log("Uploading interactive HTML…");
+            await putTechFile(
+              started.html_put_url,
+              htmlFile,
+              started.html_content_type || htmlFile.type || "text/html"
             );
           }
           await Api.completeScienceTopic(token(), started.subject_id);
@@ -8320,6 +8360,14 @@ const App = (() => {
     const name = String(file.name || "").toLowerCase();
     if (/\.(png|jpe?g|webp|gif|bmp)$/.test(name)) return true;
     return String(file.type || "").startsWith("image/");
+  }
+
+  function isScienceHtmlFile(file) {
+    if (!file) return false;
+    const name = String(file.name || "").toLowerCase();
+    if (/\.html?$/.test(name)) return true;
+    const t = String(file.type || "").toLowerCase();
+    return t === "text/html" || t === "application/xhtml+xml";
   }
 
   function guessTechMime(ext) {

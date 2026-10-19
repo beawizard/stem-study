@@ -128,18 +128,68 @@ def test_science_topic_roundtrip(dynamodb_table, admin_headers, user_headers, mo
 
 
 @pytest.mark.unit
-def test_science_topic_requires_image(dynamodb_table, admin_headers, monkeypatch):
+def test_science_topic_image_and_summary_optional(dynamodb_table, admin_headers, monkeypatch):
     _s3_env(monkeypatch)
     resp = handler(
         make_event(
             "POST",
             "/science/topics",
             headers=admin_headers,
-            body=_start_body(image_ext="", image_content_type=""),
+            body=_start_body(
+                summary="",
+                image_ext="",
+                image_content_type="",
+                html_ext="html",
+                html_content_type="text/html; charset=utf-8",
+            ),
         )
     )
-    assert resp["statusCode"] == 400
-    assert "image" in json.loads(resp["body"]).get("error", json.loads(resp["body"]).get("message", "")).lower() or "image" in resp["body"].lower()
+    assert resp["statusCode"] == 201, resp["body"]
+    body = json.loads(resp["body"])
+    assert not body.get("image_put_url")
+    assert body.get("html_put_url")
+    assert "science/science-plants/interactive.html" in (body.get("interactive_html_url") or "")
+
+
+@pytest.mark.unit
+def test_science_topic_html_replace_keeps_cover(dynamodb_table, admin_headers, monkeypatch):
+    _s3_env(monkeypatch)
+    first = handler(
+        make_event(
+            "POST",
+            "/science/topics",
+            headers=admin_headers,
+            body=_start_body(),
+        )
+    )
+    assert first["statusCode"] == 201, first["body"]
+    handler(
+        make_event(
+            "POST",
+            "/science/topics/science-plants/complete",
+            headers=admin_headers,
+        )
+    )
+    again = handler(
+        make_event(
+            "POST",
+            "/science/topics",
+            headers=admin_headers,
+            body=_start_body(
+                summary="",
+                image_ext="",
+                image_content_type="",
+                html_ext="html",
+                html_content_type="text/html",
+                replace=True,
+            ),
+        )
+    )
+    assert again["statusCode"] == 201, again["body"]
+    body = json.loads(again["body"])
+    assert not body.get("image_put_url")
+    assert "cover.png" in (body.get("image_url") or "")
+    assert body.get("html_put_url")
 
 
 @pytest.mark.unit
