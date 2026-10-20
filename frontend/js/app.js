@@ -338,7 +338,9 @@ const App = (() => {
 
   function isVedicSession(s) {
     if (!s) return false;
-    if (s.exam_kind === "vedic") return true;
+    // Vedic and ISMC share the contest paper shell. Scoring copy is separate.
+    if (s.exam_kind === "vedic" || s.exam_kind === "ismc") return true;
+    if (s.exam_kind) return false;
     const q = (s.questions || [])[0];
     return Boolean(q && q.qtype === "mcq");
   }
@@ -373,17 +375,13 @@ const App = (() => {
   }
 
   function vedicMistakesTableHtml(res) {
+    const ismc = res && res.exam_kind === "ismc";
     const details = (res && res.details) || [];
     const mistakes = details.filter((d) => !d.correct && !d.skipped);
     const body = mistakes.length
       ? mistakes
           .map((d, idx) => {
             const n = Number(d.item_no) || details.indexOf(d) + 1 || idx + 1;
-            const pen =
-              d.penalty != null && d.penalty !== ""
-                ? Number(d.penalty)
-                : vedicPenaltyForItem(n);
-            const deduct = pen > 0 ? `−${pen}` : "0";
             const you = String(d.given_answer || "—")
               .trim()
               .toUpperCase()
@@ -392,6 +390,18 @@ const App = (() => {
               .trim()
               .toUpperCase()
               .slice(0, 1) || "—";
+            if (ismc) {
+              return `<tr>
+              <td>Q${escapeHtml(String(n))}</td>
+              <td>${escapeHtml(you)}</td>
+              <td>${escapeHtml(key)}</td>
+            </tr>`;
+            }
+            const pen =
+              d.penalty != null && d.penalty !== ""
+                ? Number(d.penalty)
+                : vedicPenaltyForItem(n);
+            const deduct = pen > 0 ? `−${pen}` : "0";
             return `<tr>
               <td>Q${escapeHtml(String(n))}</td>
               <td>${escapeHtml(you)}</td>
@@ -400,7 +410,7 @@ const App = (() => {
             </tr>`;
           })
           .join("")
-      : `<tr><td colspan="4" class="muted">No mistakes.</td></tr>`;
+      : `<tr><td colspan="${ismc ? 3 : 4}" class="muted">No mistakes.</td></tr>`;
     return `
       <div class="table-wrap exam-mistakes-wrap">
         <table class="data-table exam-mistakes-table">
@@ -408,14 +418,14 @@ const App = (() => {
             <col class="exam-col-q" />
             <col class="exam-col-you" />
             <col class="exam-col-key" />
-            <col class="exam-col-deduct" />
+            ${ismc ? "" : '<col class="exam-col-deduct" />'}
           </colgroup>
           <thead>
             <tr>
               <th>Q</th>
               <th>You</th>
               <th>Key</th>
-              <th>Deduct</th>
+              ${ismc ? "" : "<th>Deduct</th>"}
             </tr>
           </thead>
           <tbody>${body}</tbody>
@@ -426,8 +436,12 @@ const App = (() => {
   function showVedicResultsDialog(res) {
     const existing = document.getElementById("exam-results-overlay");
     if (existing) existing.remove();
+    const ismc = res.exam_kind === "ismc";
     const score = Number(res.score);
-    const max = Number(res.max_score) || 100;
+    const max = Number(res.max_score) || (ismc ? Number(res.total_questions) || 0 : 100);
+    const scoringNote = ismc
+      ? "1 point for each correct answer. A wrong answer or a blank scores 0."
+      : "Official PNVMO / IVMO scoring: Q1–25 are 2 marks (no penalty), Q26–35 are 3 (−1 if wrong), Q36–40 are 4 (−2 if wrong). Blank is 0.";
     const overlay = document.createElement("div");
     overlay.id = "exam-results-overlay";
     overlay.className = "modal-overlay";
@@ -440,7 +454,7 @@ const App = (() => {
           <div class="stat-pill"><span class="stat-label">Wrong</span><span class="stat-value">${res.wrong || 0}</span></div>
           <div class="stat-pill"><span class="stat-label">Skipped</span><span class="stat-value">${res.blank || 0}</span></div>
         </div>
-        <p class="muted">Official PNVMO / IVMO scoring: Q1–25 are 2 marks (no penalty), Q26–35 are 3 (−1 if wrong), Q36–40 are 4 (−2 if wrong). Blank is 0.</p>
+        <p class="muted">${scoringNote}</p>
         <p class="muted">Time ${formatDuration(res.total_elapsed_ms || 0)}</p>
         ${vedicMistakesTableHtml(res)}
         <button type="button" class="btn" id="exam-results-done">Done</button>
@@ -2234,7 +2248,11 @@ const App = (() => {
                 }
                 ${speedBadgeHtml(pr && pr.status === "completed" ? pr : null)}
               </div>
-              <div class="muted">${lv.question_count || 0} questions · pass ≥ ${Math.round((lv.pass_accuracy || 0.8) * 100)}%
+              <div class="muted">${lv.question_count || 0} questions${
+                Number(lv.time_limit_sec) > 0
+                  ? ` · ${Math.round(Number(lv.time_limit_sec) / 60)} min`
+                  : ""
+              } · pass ≥ ${Math.round((lv.pass_accuracy || 0.8) * 100)}%
                 ${
                   pr && pr.best_elapsed_ms != null
                     ? ` · best ⏱ ${formatDuration(pr.best_elapsed_ms)}`
@@ -2431,6 +2449,11 @@ const App = (() => {
   }
 
   function vedicHintHtml(s, q, isLast) {
+    if (s && s.exam_kind === "ismc") {
+      return isLast
+        ? "Last question. 1 point if correct; wrong or blank is 0. Review from Q1 or tap a number — Submit paper when done."
+        : "1 point if correct. Wrong or blank is 0. Tap a number above to review.";
+    }
     if (!isVedicSession(s)) {
       return isLast
         ? "Blank counts as 0. Tap Submit when ready."
@@ -3885,12 +3908,13 @@ const App = (() => {
         </div>
 
         <div class="import-block" style="margin-top:1.25rem">
-          <h3>CSV or Vedic paper (single level)</h3>
+          <h3>CSV, Vedic paper, or ISMC paper (single level)</h3>
           <p class="muted">
             Import into the <strong>working level</strong> below. Arithmetic CSV:
             <code>1,+,2,=,3</code> or <code>1+2,3</code>.
             Vedic contest papers: choose the official <code>.docx</code> (e.g. set3.docx) — it imports immediately into the matching set (or the working level).
             Scoring follows PNVMO / IVMO (Q1–25: 2 marks; Q26–35: 3/−1; Q36–40: 4/−2; max 100).
+            ISMC papers (e.g. <code>ISMC_Level2_Set1.docx</code>) use the same layout. Each correct answer is 1 point. Wrong and blank score 0.
           </p>
           <div class="row">
             <div class="grow">
@@ -3900,7 +3924,7 @@ const App = (() => {
           </div>
           <form id="admin-csv-form" class="stack" style="margin-top:0.75rem">
             <div>
-              <label for="csv-file">Upload CSV or Vedic .docx</label>
+              <label for="csv-file">Upload CSV, Vedic .docx, or ISMC .docx</label>
               <input id="csv-file" type="file" accept=".csv,.docx,text/csv,text/plain,application/vnd.openxmlformats-officedocument.wordprocessingml.document" />
             </div>
             <div>
@@ -6305,6 +6329,34 @@ const App = (() => {
     return (sel && sel.value) || state.adminLevelId || null;
   }
 
+  function ismcPaperMeta(label) {
+    const name = String(label || "");
+    if (!/ismc|speed[\s_-]*math/i.test(name)) return null;
+    const level = (name.match(/level\s*[-_ ]?(\d+)/i) || [])[1];
+    const set = (name.match(/set\s*[-_ ]?(\d+)/i) || [])[1];
+    if (!level || !set) return null;
+    return {
+      levelId: `l${level}-set${set}`,
+      name: `Level ${level} Set ${set}`,
+      order: Number(level) * 100 + Number(set),
+    };
+  }
+
+  function ismcPaperFromFilename(fileName) {
+    return ismcPaperMeta(fileName);
+  }
+
+  function currentAdminSubjectLabel() {
+    const sel = document.getElementById("admin-subject-select");
+    return (
+      (sel &&
+        sel.selectedOptions &&
+        sel.selectedOptions[0] &&
+        sel.selectedOptions[0].textContent) ||
+      ""
+    );
+  }
+
   function vedicSetNumberFromFilename(fileName) {
     const m = String(fileName || "").match(/set\s*[-_ ]?(\d+)/i);
     return m ? m[1] : null;
@@ -7010,16 +7062,52 @@ const App = (() => {
         toast("Select a subject first.", true);
         return false;
       }
+      const ismcFile = docxB64
+        ? ismcPaperFromFilename(fileName) ||
+          ismcPaperMeta(currentAdminSubjectLabel())
+        : null;
       let levelId =
-        (docxB64 && levelIdFromVedicFilename(fileName)) || currentAdminLevelId();
+        (ismcFile && ismcFile.levelId) ||
+        (docxB64 && !ismcFile && levelIdFromVedicFilename(fileName)) ||
+        currentAdminLevelId();
       if (!levelId) {
-        toast("Select a working level (or name the file set3.docx to match Set 3).", true);
+        toast(
+          "Select a working level (or name the file set3.docx / ISMC_Level2_Set1.docx).",
+          true
+        );
         return false;
       }
       const sel = document.getElementById("admin-level-select");
       let knownLevel =
         sel &&
         Array.from(sel.options).some((o) => o.value && o.value === String(levelId));
+      if (!knownLevel && ismcFile) {
+        try {
+          toast(`Creating ${ismcFile.name}…`);
+          await ensureLevelForImport(
+            subjectId,
+            ismcFile.levelId,
+            ismcFile.name,
+            ismcFile.order,
+            { pass_accuracy: 0.8, min_questions: 30 }
+          );
+          levelId = ismcFile.levelId;
+          knownLevel = true;
+          if (sel && !Array.from(sel.options).some((o) => o.value === levelId)) {
+            const opt = document.createElement("option");
+            opt.value = levelId;
+            opt.textContent = `${ismcFile.name} · order ${ismcFile.order} · 0 Q`;
+            sel.appendChild(opt);
+          }
+        } catch (err) {
+          toast(
+            (err && err.message) ||
+              `Could not create ${ismcFile.name}. Add the level first, then upload.`,
+            true
+          );
+          return false;
+        }
+      }
       if (!knownLevel && docxB64 && currentAdminSubjectLooksVedic()) {
         const setNo = vedicSetNumberFromFilename(fileName) || String(levelId);
         try {
@@ -7056,7 +7144,7 @@ const App = (() => {
       }
       if (sel && levelId) sel.value = levelId;
       if (!docxB64 && !String(text || "").trim()) {
-        toast("Paste CSV, choose a CSV file, or upload a Vedic .docx first.", true);
+        toast("Paste CSV, or upload a Vedic or ISMC .docx first.", true);
         return false;
       }
       const replaceBox = document.getElementById("csv-replace");
@@ -7090,10 +7178,17 @@ const App = (() => {
         if (!imported) {
           throw new Error("Import finished but loaded 0 questions. Check the file and working level.");
         }
-        const kind = summary.exam_kind === "vedic" ? "Vedic paper" : "CSV";
+        const kind =
+          summary.exam_kind === "vedic"
+            ? "Vedic paper"
+            : summary.exam_kind === "ismc"
+              ? "ISMC paper"
+              : "CSV";
+        const scoring =
+          summary.exam_kind === "ismc" ? " · 1 point each" : "";
         toast(
           `${kind}: imported ${imported} questions into ${levelId}` +
-            ` · total ${summary.question_count}`
+            ` · total ${summary.question_count}${scoring}`
         );
         state.pendingDocxB64 = null;
         if (csvFile) csvFile.value = "";
@@ -7724,7 +7819,7 @@ const App = (() => {
         StudyCache.invalidateLanding();
         ProfileCache.invalidate();
         InsightsCache.invalidate();
-        if (res.exam_kind === "vedic") {
+        if (res.exam_kind === "vedic" || res.exam_kind === "ismc") {
           setStudyModeUi(false);
           document.documentElement.style.setProperty("--vv-keyboard", "0px");
           showVedicResultsDialog(state.studyResults);

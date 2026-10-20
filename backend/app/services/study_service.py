@@ -10,7 +10,7 @@ from typing import Any
 from app import db, keys
 from app.services import subject_service
 from app.services.insights_service import build_recommendation
-from app.vedic import MAX_SCORE as VEDIC_MAX_SCORE, score_vedic_item
+from app.vedic import MAX_SCORE as VEDIC_MAX_SCORE, score_ismc_item, score_vedic_item
 from app.validation import AnswerSubmit
 
 
@@ -269,10 +269,10 @@ def _ensure_level_unlocked(user_id: str, subject_id: str, level: dict[str, Any])
     Seed-style ids ``l1`` / ``l2`` are treated as majors 1 / 2.
     If names cannot be parsed, falls back to sequential ``order`` unlock.
 
-    Vedic contest papers (``exam_kind=vedic``) are independent — any set can be
-    taken in any order, with no prerequisite.
+    Vedic and ISMC contest papers are independent — any set can be taken in
+    any order, with no prerequisite.
     """
-    if str(level.get("exam_kind") or "") == "vedic":
+    if str(level.get("exam_kind") or "") in {"vedic", "ismc"}:
         return
 
     levels = subject_service.list_levels(subject_id)
@@ -443,8 +443,10 @@ def complete_session(
     details: list[dict[str, Any]] = []
     level = subject_service.get_level(session["subject_id"], session["level_id"])
     exam_kind = str(level.get("exam_kind") or "")
+    is_ismc = exam_kind == "ismc"
     is_vedic = exam_kind == "vedic"
-    vedic_marks = 0
+    paper_marks = 0
+    ismc_max = 0
     blank_count = 0
     wrong_count = 0
 
@@ -457,10 +459,29 @@ def complete_session(
         )
         expected = str(question["answer"]) if question else ""
         qtype = (question or {}).get("qtype") or "open"
-        if qtype == "mcq":
+        # Older MCQ imports have no exam_kind. Keep Vedic scoring for those.
+        # ISMC stays flat even though its items are also multiple choice.
+        if qtype == "mcq" and not is_ismc:
             is_vedic = True
         item_penalty = 0
-        if is_vedic and qtype == "mcq":
+        if is_ismc and qtype == "mcq":
+            user_ans = raw_given
+            scored = score_ismc_item(
+                expected=expected,
+                given=user_ans,
+                points=(question or {}).get("points"),
+            )
+            correct = bool(scored["correct"])
+            skipped = bool(scored["skipped"])
+            marks = int(scored["marks"])
+            item_penalty = 0
+            paper_marks += marks
+            ismc_max += int(scored["points"])
+            if skipped:
+                blank_count += 1
+            elif not correct:
+                wrong_count += 1
+        elif is_vedic and qtype == "mcq":
             user_ans = raw_given
             scored = score_vedic_item(
                 item_no=int((question or {}).get("item_no") or 0),
@@ -473,7 +494,7 @@ def complete_session(
             skipped = bool(scored["skipped"])
             marks = int(scored["marks"])
             item_penalty = int(scored["penalty"])
-            vedic_marks += marks
+            paper_marks += marks
             if skipped:
                 blank_count += 1
             elif not correct:
@@ -524,8 +545,12 @@ def complete_session(
     accuracy = correct_count / total_q if total_q else 0.0
     pass_accuracy = float(level.get("pass_accuracy", 0.8))
     min_q = int(level.get("min_questions", 5))
+    is_paper = is_vedic or is_ismc
     if is_vedic:
-        passed = vedic_marks >= int(round(pass_accuracy * VEDIC_MAX_SCORE))
+        passed = paper_marks >= int(round(pass_accuracy * VEDIC_MAX_SCORE))
+    elif is_ismc:
+        max_points = ismc_max or total_q
+        passed = paper_marks >= int(round(pass_accuracy * max_points))
     else:
         passed = accuracy >= pass_accuracy and total_q >= min_q
     elapsed = max(0, int(total_elapsed_ms))
@@ -544,7 +569,7 @@ def complete_session(
 
     progress_status = "completed" if passed else "failed"
     speed_badge = (
-        None if is_vedic else (speed_badge_for_elapsed_ms(elapsed) if passed else None)
+        None if is_paper else (speed_badge_for_elapsed_ms(elapsed) if passed else None)
     )
     _upsert_progress(
         user_id,
@@ -594,7 +619,7 @@ def complete_session(
         "level_id": session["level_id"],
         "session_complete": True,
         "total_questions": total_q,
-        "answered": total_q - blank_count if is_vedic else total_q,
+        "answered": total_q - blank_count if is_paper else total_q,
         "correct": correct_count,
         "accuracy": accuracy,
         "passed": passed,
@@ -608,8 +633,18 @@ def complete_session(
         out.update(
             {
                 "exam_kind": "vedic",
-                "score": vedic_marks,
+                "score": paper_marks,
                 "max_score": VEDIC_MAX_SCORE,
+                "blank": blank_count,
+                "wrong": wrong_count,
+            }
+        )
+    elif is_ismc:
+        out.update(
+            {
+                "exam_kind": "ismc",
+                "score": paper_marks,
+                "max_score": ismc_max or total_q,
                 "blank": blank_count,
                 "wrong": wrong_count,
             }

@@ -12,8 +12,12 @@ from botocore.exceptions import ClientError
 from app import db, keys
 from app.vedic import (
     TIME_LIMIT_SEC as VEDIC_TIME_LIMIT_SEC,
+    detect_exam_kind,
     extract_docx_paragraphs,
+    ismc_time_limit_sec,
+    looks_like_ismc,
     looks_like_vedic,
+    parse_ismc_mcq,
     parse_vedic_mcq,
 )
 from app.validation import LevelCreate, STEM_CATEGORIES, SubjectCreate, parse_csv_questions
@@ -397,6 +401,10 @@ def import_questions_csv(
     )
 
 
+def _contest_paragraphs(text: str) -> list[str]:
+    return [ln.strip() for ln in text.replace("\r\n", "\n").split("\n") if ln.strip()]
+
+
 def import_questions(
     subject_id: str,
     level_id: str,
@@ -405,7 +413,7 @@ def import_questions(
     docx_bytes: bytes | None = None,
     replace: bool = False,
 ) -> dict[str, Any]:
-    """Import arithmetic CSV or a Vedic PNVMO/IVMO-style paper (.docx or text)."""
+    """Import arithmetic CSV, a Vedic paper, or an ISMC paper (.docx or text)."""
     level = get_level(subject_id, level_id)
     try:
         subject = get_subject(subject_id)
@@ -416,15 +424,22 @@ def import_questions(
         topic = level.get("topic") or ""
 
     exam_kind = ""
+    ismc_limit = 0
     parsed: list[dict[str, Any]]
+    paragraphs: list[str] | None = None
     if docx_bytes:
-        parsed = parse_vedic_mcq(extract_docx_paragraphs(docx_bytes))
-        exam_kind = "vedic"
-    elif text and looks_like_vedic(text):
-        parsed = parse_vedic_mcq(
-            [ln.strip() for ln in text.replace("\r\n", "\n").split("\n") if ln.strip()]
-        )
-        exam_kind = "vedic"
+        paragraphs = extract_docx_paragraphs(docx_bytes)
+    elif text and (looks_like_ismc(text) or looks_like_vedic(text)):
+        paragraphs = _contest_paragraphs(text)
+
+    if paragraphs is not None:
+        exam_kind = detect_exam_kind(paragraphs)
+        if exam_kind == "ismc":
+            parsed = parse_ismc_mcq(paragraphs)
+            ismc_limit = ismc_time_limit_sec(paragraphs)
+        else:
+            parsed = parse_vedic_mcq(paragraphs)
+            exam_kind = "vedic"
     else:
         parsed = parse_csv_questions(text or "")
 
@@ -488,6 +503,11 @@ def import_questions(
         # Handbook: ~60/100 is medal-range on Primary; keep as pass bar.
         if float(level.get("pass_accuracy") or 0) >= 0.8:
             level_updates["pass_accuracy"] = 0.6
+    elif exam_kind == "ismc":
+        # Flat scoring: do not copy Vedic mark bands, penalties, or the 60/100 bar.
+        level_updates["exam_kind"] = "ismc"
+        level_updates["time_limit_sec"] = ismc_limit or (12 * 60)
+        level_updates["min_questions"] = max(created or 1, 1)
     db.update_item(pk, keys.level_sk(level_id), level_updates)
     return {
         "subject_id": subject_id,
