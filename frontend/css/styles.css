@@ -1893,7 +1893,7 @@ body.admin-mode .usage-wrap.table-wrap {
   flex-direction: column;
   align-items: flex-start;
   text-align: left;
-  min-height: 8.5rem;
+  min-height: 6.375rem;
   padding: 0.95rem 0.9rem;
   border: 2px solid #99f6e4;
   border-radius: 16px;
@@ -2232,7 +2232,7 @@ body.tech-mode .topbar {
 }
 @media (max-width: 380px) {
   .stem-tile-grid { gap: 0.55rem; }
-  .stem-tile { min-height: 7.5rem; padding: 0.8rem 0.7rem; }
+  .stem-tile { min-height: 5.625rem; padding: 0.8rem 0.7rem; }
 }
 
 .study-header {
