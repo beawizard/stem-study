@@ -58,6 +58,7 @@ def record_topic_access(user_id: str, subject_id: str, elapsed_ms: int = 0) -> d
     nickname = _display_name(profile, user_id)
     grade = _grade(profile)
 
+    is_new = not (existing and not existing.get("deleted_at"))
     if existing and not existing.get("deleted_at"):
         total = int(existing.get("total_ms") or 0) + added
         first = str(existing.get("first_access_at") or "") or now
@@ -82,7 +83,24 @@ def record_topic_access(user_id: str, subject_id: str, elapsed_ms: int = 0) -> d
         "GSI1SK": keys.topic_access_gsi1_sk(total, user_id),
     }
     db.put_item(item)
+    # One visit per learner. Later heartbeats update minutes only.
+    if is_new:
+        _increment_visit_count(sid)
     return item
+
+
+def _increment_visit_count(subject_id: str) -> None:
+    """Denormalized unique-learner visits on the subject, for Home ranking."""
+    try:
+        item = subject_service.get_subject(subject_id)
+    except SubjectNotFound:
+        return
+    count = int(item.get("visit_count") or 0) + 1
+    db.update_item(
+        keys.subject_pk(subject_id),
+        keys.subject_meta_sk(),
+        {"visit_count": count},
+    )
 
 
 def list_topic_usage(subject_id: str, *, limit: int = USAGE_TOP_N) -> dict[str, Any]:

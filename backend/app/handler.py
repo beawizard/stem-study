@@ -31,6 +31,8 @@ Routes (all require Cognito JWT unless noted):
   GET               /study/bootstrap?subject_id=   (subjects + landing, one round-trip)
   GET               /insights   (?notices=1 optional; default skips content_notices)
   GET               /leaderboard                 (top 100 by XP: Rank, Name, XP, Grade)
+  GET               /recommendations             (Home lesson carousel)
+  PUT               /recommendations             (admin — curated list for the Melon Manager)
   POST              /study/access                (learner heartbeat: topic minutes)
   GET               /admin/topics/{id}/usage     (admin — top 100 users on a topic)
   GET|POST          /mastery                     (list published / create+publish collection)
@@ -79,6 +81,7 @@ from app.services import (
     study_service,
     subject_service,
     task_service,
+    recommendation_service,
     science_service,
     technology_service,
     user_service,
@@ -117,6 +120,7 @@ from app.validation import (
     SubjectCreate,
     SubjectUpdate,
     TaskCreate,
+    RecommendationsUpdate,
     TaskUpdate,
     ScienceTopicCreate,
     TechnologyTopicCreate,
@@ -249,6 +253,22 @@ def _route(
         entries = user_service.list_leaderboard(limit=limit)
         cap = user_service.LEADERBOARD_TOP_N
         return ok({"entries": entries, "limit": min(max(limit, 1), cap)})
+
+    if method == "GET" and path == "/recommendations":
+        return ok(recommendation_service.list_home_recommendations())
+
+    if method == "PUT" and path == "/recommendations":
+        require_admin(user)
+        data = parse_body(RecommendationsUpdate, body)
+        try:
+            return ok(
+                recommendation_service.set_home_recommendations(
+                    data.subject_ids,
+                    updated_by=user.user_id,
+                )
+            )
+        except ValueError as exc:
+            return bad_request(str(exc))
 
     if method == "PATCH" and path == "/me":
         data = parse_body(ProfileUpdate, body)

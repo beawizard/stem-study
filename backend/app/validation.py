@@ -509,6 +509,32 @@ class SessionComplete(BaseModel):
     answers: list[SessionAnswerItem] = Field(..., min_length=1, max_length=500)
 
 
+class RecommendationsUpdate(BaseModel):
+    """PUT /recommendations — curated Home carousel.
+
+    An empty list clears the curated set and Home falls back to
+    top-visited (or random) topics. The Melon Manager bot uses this.
+    """
+
+    model_config = ConfigDict(str_strip_whitespace=True, extra="forbid")
+
+    subject_ids: list[str] = Field(default_factory=list, max_length=24)
+
+    @field_validator("subject_ids")
+    @classmethod
+    def validate_subject_ids(cls, values: list[str]) -> list[str]:
+        cleaned: list[str] = []
+        for raw in values:
+            sid = str(raw or "").strip()
+            if not sid:
+                continue
+            if not SUBJECT_ID_PATTERN.match(sid):
+                raise ValueError("Invalid subject_id format")
+            if sid not in cleaned:
+                cleaned.append(sid)
+        return cleaned
+
+
 class TopicAccessPing(BaseModel):
     """POST /study/access — learner heartbeat while a topic is open."""
 

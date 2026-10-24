@@ -11,6 +11,7 @@ USER#<sub>          / PAYMENT#<payment_id>      GCash payment record
 USER#<sub>          / MASTERY#<id>              mastery topic collection
 USER#<sub>          / ACCESS#<subject_id>       topic access/usage (mins, first/last)
 SUBJECT#<id>        / META                      subject definition
+CONFIG#RECOMMENDATIONS / HOME                  curated Home carousel (bot/admin)
 SUBJECT#<id>        / LEVEL#<level_id>          level definition
 SUBJECT#<id>        / LEVEL#<level_id>#Q#<qid>  question
 SCHOOL#<id>         / META                      school catalog (admin-managed)
@@ -81,6 +82,15 @@ def mastery_sk(mastery_id: str) -> str:
 def access_sk(subject_id: str) -> str:
     """Per-user per-topic access/usage under USER#… / ACCESS#…"""
     return f"ACCESS#{subject_id}"
+
+
+def recommendations_pk() -> str:
+    """Single curated Home carousel list (Melon Manager / admin)."""
+    return "CONFIG#RECOMMENDATIONS"
+
+
+def recommendations_sk() -> str:
+    return "HOME"
 
 
 def subject_pk(subject_id: str) -> str:

@@ -70,6 +70,8 @@ const Api = (() => {
       const q = Number.isFinite(limit) ? `?limit=${Math.max(1, Math.min(limit, 100))}` : "";
       return request(`/leaderboard${q}`, { token });
     },
+    /** Home carousel: curated list, else top visited (or random) lessons. */
+    recommendations: (token) => request("/recommendations", { token }),
     /** Honor-system: claim Facebook Follow → 6 months free subscription. */
     claimFacebookFollow: (token, body) =>
       request("/me/facebook/follow", { method: "POST", body, token }),

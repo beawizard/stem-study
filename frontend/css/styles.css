@@ -369,6 +369,108 @@ button { cursor: pointer; min-height: var(--tap); }
 .leaderboard-table tbody tr:nth-child(2) .lb-rank { color: #64748b; }
 .leaderboard-table tbody tr:nth-child(3) .lb-rank { color: #c2410c; }
 
+/* Home recommended-lesson carousel (sits above the leaderboard) */
+.recommend-card h2 {
+  margin: 0;
+}
+.recommend-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  margin-bottom: 0.35rem;
+}
+.recommend-nav {
+  display: flex;
+  gap: 0.35rem;
+}
+.recommend-nav .btn-icon {
+  width: 2rem;
+  height: 2rem;
+  min-height: 2rem;
+  min-width: 2rem;
+  border-radius: 8px;
+  font-size: 1.25rem;
+  line-height: 1;
+  padding: 0;
+}
+.recommend-hint {
+  font-size: 0.82rem;
+  margin: 0 0 0.55rem !important;
+}
+.recommend-scroller {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.65rem;
+  overflow-x: auto;
+  overflow-y: hidden;
+  scroll-snap-type: x mandatory;
+  -webkit-overflow-scrolling: touch;
+  touch-action: pan-x pan-y;
+  padding: 0.15rem 0.1rem 0.45rem;
+  scrollbar-width: thin;
+}
+.recommend-item {
+  flex: 0 0 auto;
+  scroll-snap-align: start;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.28rem;
+  max-width: 100%;
+  margin: 0;
+  padding: 0.4rem 0.45rem 0.5rem;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: #fff;
+  color: var(--ink);
+  text-align: center;
+  user-select: none;
+}
+.recommend-item:hover {
+  border-color: var(--brand);
+}
+.recommend-item-science { border-color: #86efac; }
+.recommend-item-technology { border-color: #7dd3fc; }
+.recommend-item-engineering { border-color: #fcd34d; }
+.recommend-item-mathematics { border-color: #5eead4; }
+.recommend-thumb {
+  display: block;
+  width: auto;
+  height: auto;
+  max-width: none;
+  border-radius: 8px;
+  background: #f8fafc;
+}
+.recommend-fallback {
+  display: grid;
+  place-items: center;
+  width: 4.5rem;
+  height: 4.5rem;
+  border-radius: 8px;
+  font-size: 1.35rem;
+  font-weight: 800;
+  color: var(--brand-dark);
+  background: #f0fdfa;
+}
+.recommend-fallback-science { background: #dcfce7; }
+.recommend-fallback-technology { background: #e0f2fe; }
+.recommend-fallback-engineering { background: #fef3c7; }
+.recommend-fallback-mathematics { background: #ccfbf1; }
+.recommend-caption {
+  max-width: 9rem;
+  font-size: 0.75rem;
+  font-weight: 700;
+  line-height: 1.25;
+}
+.recommend-cat {
+  font-size: 0.62rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
 /* Mastery hub / create wizard */
 .mastery-hub-header {
   display: flex;

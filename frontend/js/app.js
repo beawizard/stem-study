@@ -37,6 +37,9 @@ const App = (() => {
     assessmentPreview: null,
     /** Cached Home leaderboard rows for CSV download */
     leaderboardEntries: [],
+    /** Home lesson carousel. Kept for the session so a random fill does not reshuffle. */
+    recommendedLessons: [],
+    recommendedLoaded: false,
     /** Mastery hub / create wizard / study-within-collection */
     masteryView: "hub", // hub | create | edit | study
     masteryCreateStep: 1,
@@ -552,12 +555,22 @@ const App = (() => {
       toast("Admin access required.", true);
       route = "home";
     }
-    // Top-level Study / Home → Study opens STEM tiles unless a session or deep-link is active
-    if (
+    // Carousel (and other deep links) open a specific topic instead of the STEM tiles.
+    if (route === "study" && state.studyTopicIntent) {
+      const intent = state.studyTopicIntent;
+      state.studyTopicIntent = null;
+      resetStudyState();
+      state.studyCategory = intent.category || "Mathematics";
+      state.studySubjectId = intent.subjectId || null;
+      state.studyFocusLevelId = null;
+      state.techPageIndex = 0;
+      state.studyView = studyViewForCategory(state.studyCategory);
+    } else if (
       route === "study" &&
       !(state.session && state.studyPhase) &&
       !state.studyFocusLevelId
     ) {
+      // Top-level Study opens the STEM tiles unless a session or deep-link is active
       state.studyView = "hub";
     }
     // Assessment sessions must not leak into Study; clear when leaving Assessment
@@ -1246,6 +1259,144 @@ const App = (() => {
       </div>`;
   }
 
+  function studyViewForCategory(category) {
+    const name = String(category || "");
+    if (name === "Technology") return "tech";
+    if (name === "Science") return "sci";
+    if (name === "Engineering") return "eng";
+    return "math";
+  }
+
+  function openRecommendedLesson(subjectId, category) {
+    const sid = String(subjectId || "").trim();
+    if (!sid) return;
+    state.studyTopicIntent = {
+      subjectId: sid,
+      category: String(category || "").trim() || "Mathematics",
+    };
+    navigate("study");
+  }
+
+  function recommendedLessonsHtml(items) {
+    const lessons = Array.isArray(items) ? items : [];
+    if (!lessons.length) return "";
+    const cards = lessons
+      .map((item) => {
+        const subjectId = String(item.subject_id || "");
+        const category = String(item.category || "");
+        const topic = String(item.topic || item.name || subjectId || "Lesson");
+        const slug = category.toLowerCase().replace(/[^a-z]/g, "") || "lesson";
+        const imageUrl = String(item.image_url || "").trim();
+        const visual = imageUrl
+          ? `<img class="recommend-thumb" data-thumb-scale="8" src="${escapeAttr(
+              imageUrl
+            )}" alt="" draggable="false" />`
+          : `<span class="recommend-fallback recommend-fallback-${slug}" aria-hidden="true">${escapeHtml(
+              topic.slice(0, 1).toUpperCase()
+            )}</span>`;
+        return `<button type="button" class="recommend-item recommend-item-${slug}" role="listitem"
+            data-recommend-subject="${escapeAttr(subjectId)}"
+            data-recommend-category="${escapeAttr(category)}"
+            aria-label="Open ${escapeAttr(topic)}">
+            ${visual}
+            <span class="recommend-caption">${escapeHtml(topic)}</span>
+            <span class="recommend-cat">${escapeHtml(category)}</span>
+          </button>`;
+      })
+      .join("");
+    return `
+      <div class="card recommend-card">
+        <div class="recommend-head">
+          <h2>Recommended lessons</h2>
+          <div class="recommend-nav">
+            <button type="button" class="btn-icon secondary" id="recommend-prev" aria-label="Previous lessons">‹</button>
+            <button type="button" class="btn-icon secondary" id="recommend-next" aria-label="Next lessons">›</button>
+          </div>
+        </div>
+        <p class="muted recommend-hint">Swipe through the lessons. Tap one to open that topic.</p>
+        <div class="recommend-scroller" id="recommend-scroller" tabindex="0" role="list" aria-label="Recommended lessons">
+          ${cards}
+        </div>
+      </div>`;
+  }
+
+  function bindRecommendCarousel() {
+    const scroller = document.getElementById("recommend-scroller");
+    if (!scroller) return;
+    scroller.querySelectorAll("img[data-thumb-scale]").forEach((img) => {
+      const fit = () => {
+        const width = img.naturalWidth;
+        const height = img.naturalHeight;
+        if (!width || !height) return;
+        const scale = Number(img.getAttribute("data-thumb-scale")) || 8;
+        img.style.width = `${Math.max(1, Math.round(width / scale))}px`;
+        img.style.height = `${Math.max(1, Math.round(height / scale))}px`;
+      };
+      if (img.complete && img.naturalWidth) fit();
+      else img.addEventListener("load", fit);
+    });
+
+    let drag = null;
+    scroller.addEventListener("pointerdown", (event) => {
+      if (event.pointerType !== "mouse" || event.button !== 0) return;
+      drag = {
+        id: event.pointerId,
+        x: event.clientX,
+        left: scroller.scrollLeft,
+        moved: false,
+      };
+    });
+    scroller.addEventListener("pointermove", (event) => {
+      if (!drag || drag.id !== event.pointerId) return;
+      const dx = event.clientX - drag.x;
+      if (Math.abs(dx) > 6) {
+        if (!drag.moved) {
+          drag.moved = true;
+          // Capture only after a drag starts, so a plain click still hits the lesson button.
+          scroller.setPointerCapture(event.pointerId);
+        }
+      }
+      if (drag.moved) scroller.scrollLeft = drag.left - dx;
+    });
+    const endDrag = (event) => {
+      if (!drag || !event || drag.id !== event.pointerId) return;
+      scroller.dataset.swiped = drag.moved ? "1" : "";
+      drag = null;
+    };
+    scroller.addEventListener("pointerup", endDrag);
+    scroller.addEventListener("pointercancel", endDrag);
+
+    const page = () => Math.max(120, Math.round(scroller.clientWidth * 0.8));
+    scroller.addEventListener("keydown", (event) => {
+      if (event.key === "ArrowRight") {
+        event.preventDefault();
+        scroller.scrollBy({ left: page(), behavior: "smooth" });
+      } else if (event.key === "ArrowLeft") {
+        event.preventDefault();
+        scroller.scrollBy({ left: -page(), behavior: "smooth" });
+      }
+    });
+
+    const prev = document.getElementById("recommend-prev");
+    const next = document.getElementById("recommend-next");
+    if (prev) prev.onclick = () => scroller.scrollBy({ left: -page(), behavior: "smooth" });
+    if (next) next.onclick = () => scroller.scrollBy({ left: page(), behavior: "smooth" });
+
+    scroller.querySelectorAll("[data-recommend-subject]").forEach((button) => {
+      button.addEventListener("click", (event) => {
+        if (scroller.dataset.swiped === "1") {
+          event.preventDefault();
+          scroller.dataset.swiped = "";
+          return;
+        }
+        openRecommendedLesson(
+          button.getAttribute("data-recommend-subject"),
+          button.getAttribute("data-recommend-category")
+        );
+      });
+    });
+  }
+
   function viewHome(leaderboardEntries) {
     const p = state.profile || {};
     const name = learnerNickname(p);
@@ -1270,6 +1421,7 @@ const App = (() => {
         </div>
       </div>
       ${contentNoticesHtml(p.content_notices)}
+      ${recommendedLessonsHtml(state.recommendedLessons)}
       <div class="card leaderboard-card">
         <h2>Leaderboard</h2>
         <p class="muted leaderboard-hint">XP from set badges: Legendary Wizard 5 · Superb Advanced 3 · Cool Novice 1</p>
@@ -5629,6 +5781,15 @@ const App = (() => {
         } catch {
           boardEntries = [];
         }
+        if (!state.recommendedLoaded) {
+          try {
+            const rec = await Api.recommendations(token());
+            state.recommendedLessons = Array.isArray(rec && rec.items) ? rec.items : [];
+            state.recommendedLoaded = true;
+          } catch {
+            state.recommendedLessons = [];
+          }
+        }
         html = viewHome(boardEntries);
         break;
     }
@@ -8069,6 +8230,17 @@ const App = (() => {
     if (lbCsv) {
       lbCsv.onclick = () => downloadLeaderboardCsv(state.leaderboardEntries);
     }
+    bindRecommendCarousel();
+    if (
+      state.route === "study" &&
+      !state.studyPhase &&
+      state.studySubjectId &&
+      (state.studyView === "sci" ||
+        state.studyView === "eng" ||
+        state.studyView === "math")
+    ) {
+      noteTopicVisit(state.studySubjectId);
+    }
 
     // Insights → Study deep link for a specific question set
     main().querySelectorAll("[data-study-level]").forEach((a) => {
@@ -8472,6 +8644,13 @@ const App = (() => {
       }
       throw e;
     }
+  }
+
+  function noteTopicVisit(subjectId) {
+    const sid = String(subjectId || "").trim();
+    if (!sid || state._visitNoted === sid) return;
+    state._visitNoted = sid;
+    pingTopicAccess(sid, 0);
   }
 
   function pingTopicAccess(subjectId, elapsedMs, { keepalive = false } = {}) {
