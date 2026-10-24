@@ -1257,6 +1257,12 @@ const App = (() => {
         <h1>Hello${name ? `, ${escapeHtml(name)}` : ""}</h1>
         <p class="muted">Study time: ${formatDuration(p.total_study_ms || 0)} total · ${p.study_sessions_count || 0} session(s)
           ${p.last_study_elapsed_ms ? ` · last ${formatDuration(p.last_study_elapsed_ms)}` : ""}</p>
+        <div class="how-it-works">
+          <p class="muted how-it-works-title">How it works</p>
+          <p class="muted">1. Take an <strong>Assessment</strong> to find your best starting level, or open Study to pick a set.</p>
+          <p class="muted">2. Answer questions — accuracy &amp; speed unlock insights.</p>
+          <p class="muted">3. Complete any set of Level N to unlock Level N+1 (you need not finish every variation of N).</p>
+        </div>
         <div class="row home-actions" style="margin-top:1rem">
           <button class="btn home-action-btn accent" type="button" data-go="assessment">Assessment</button>
           <button class="btn home-action-btn" type="button" data-go="study">Start studying</button>
@@ -1264,12 +1270,6 @@ const App = (() => {
         </div>
       </div>
       ${contentNoticesHtml(p.content_notices)}
-      <div class="card">
-        <h2>How it works</h2>
-        <p>1. Take an <strong>Assessment</strong> to find your best starting level, or open Study to pick a set.</p>
-        <p>2. Answer questions — accuracy &amp; speed unlock insights.</p>
-        <p>3. Complete any set of Level N to unlock Level N+1 (you need not finish every variation of N).</p>
-      </div>
       <div class="card leaderboard-card">
         <h2>Leaderboard</h2>
         <p class="muted leaderboard-hint">XP from set badges: Legendary Wizard 5 · Superb Advanced 3 · Cool Novice 1</p>

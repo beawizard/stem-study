@@ -1070,6 +1070,18 @@ body.study-mode .study-vedic .study-hint {
 }
 
 /* Home action row: Assessment + Start studying + Insights on one line (iPhone portrait) */
+.how-it-works {
+  margin-top: 0.55rem;
+}
+.how-it-works p {
+  margin: 0.15rem 0;
+  font-size: 0.92rem;
+}
+.how-it-works-title {
+  font-weight: 600;
+  margin-top: 0.15rem !important;
+  margin-bottom: 0.2rem !important;
+}
 .home-actions {
   display: flex;
   flex-wrap: nowrap;
