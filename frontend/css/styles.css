@@ -394,10 +394,6 @@ button { cursor: pointer; min-height: var(--tap); }
   line-height: 1;
   padding: 0;
 }
-.recommend-hint {
-  font-size: 0.82rem;
-  margin: 0 0 0.55rem !important;
-}
 .recommend-scroller {
   display: flex;
   align-items: stretch;

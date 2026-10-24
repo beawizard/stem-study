@@ -1329,7 +1329,6 @@ const App = (() => {
             <button type="button" class="btn-icon secondary" id="recommend-next" aria-label="Next lessons">›</button>
           </div>
         </div>
-        <p class="muted recommend-hint">Swipe through the lessons. Tap one to open that topic.</p>
         <div class="recommend-scroller" id="recommend-scroller" tabindex="0" role="list" aria-label="Recommended lessons">
           ${cards}
         </div>
@@ -1857,7 +1856,6 @@ const App = (() => {
     return `
       <div class="card study-hub-card">
         <h1>Study</h1>
-        <p class="muted">Choose a STEM area to begin.</p>
         <div class="stem-tile-grid">${cards}</div>
       </div>
       ${recommendedLessonsHtml(state.recommendedLessons)}`;
