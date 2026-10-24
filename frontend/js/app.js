@@ -2037,7 +2037,7 @@ const App = (() => {
     if (kind === "facebook") {
       return `<svg class="sci-video-brand-icon" viewBox="0 0 24 24" aria-hidden="true"><rect width="24" height="24" rx="6" fill="#1877F2"/><path fill="#fff" d="M15.2 8.4h-1.5c-.4 0-.6.3-.6.7v1.2h2.1l-.3 2.2h-1.8V19h-2.3v-6.5H9.2v-2.2h1.6V9.1c0-1.7 1-2.7 2.7-2.7.8 0 1.5.1 1.7.2v1.8z"/></svg>`;
     }
-    return `<svg class="sci-video-brand-icon" viewBox="0 0 24 24" aria-hidden="true"><rect x="1" y="4.5" width="22" height="15" rx="4" fill="#FF0000"/><path fill="#fff" d="M10 9.2v5.6l5.2-2.8L10 9.2z"/></svg>`;
+    return `<svg class="sci-video-brand-icon" viewBox="0 0 24 24" aria-hidden="true"><rect width="24" height="24" rx="6" fill="#FF0000"/><path fill="#fff" d="M9.2 7.6v8.8l7.6-4.4-7.6-4.4z"/></svg>`;
   }
 
   function scienceVideoRow(url, kind) {
