@@ -1299,19 +1299,19 @@ const App = (() => {
         const slug = category.toLowerCase().replace(/[^a-z]/g, "") || "lesson";
         const imageUrl = String(item.image_url || "").trim();
         const visual = imageUrl
-          ? `<img class="recommend-thumb" data-thumb-scale="8" src="${escapeAttr(
+          ? `<img class="recommend-thumb" src="${escapeAttr(
               imageUrl
             )}" alt="" draggable="false" />`
-          : `<span class="recommend-fallback recommend-fallback-${slug}" aria-hidden="true">${escapeHtml(
-              topic.slice(0, 1).toUpperCase()
-            )}</span>`;
+          : `<span class="recommend-fallback recommend-fallback-${slug}" aria-hidden="true"></span>`;
         return `<button type="button" class="recommend-item recommend-item-${slug}" role="listitem"
             data-recommend-subject="${escapeAttr(subjectId)}"
             data-recommend-category="${escapeAttr(category)}"
             aria-label="Open ${escapeAttr(topic)}">
             ${visual}
-            <span class="recommend-caption">${escapeHtml(topic)}</span>
-            <span class="recommend-cat">${escapeHtml(category)}</span>
+            <span class="recommend-copy">
+              <span class="recommend-caption">${escapeHtml(topic)}</span>
+              <span class="recommend-cat">${escapeHtml(category)}</span>
+            </span>
           </button>`;
       })
       .join("");
@@ -1334,18 +1334,6 @@ const App = (() => {
   function bindRecommendCarousel() {
     const scroller = document.getElementById("recommend-scroller");
     if (!scroller) return;
-    scroller.querySelectorAll("img[data-thumb-scale]").forEach((img) => {
-      const fit = () => {
-        const width = img.naturalWidth;
-        const height = img.naturalHeight;
-        if (!width || !height) return;
-        const scale = Number(img.getAttribute("data-thumb-scale")) || 8;
-        img.style.width = `${Math.max(1, Math.round(width / scale))}px`;
-        img.style.height = `${Math.max(1, Math.round(height / scale))}px`;
-      };
-      if (img.complete && img.naturalWidth) fit();
-      else img.addEventListener("load", fit);
-    });
 
     let drag = null;
     scroller.addEventListener("pointerdown", (event) => {

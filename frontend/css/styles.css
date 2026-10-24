@@ -400,7 +400,7 @@ button { cursor: pointer; min-height: var(--tap); }
 }
 .recommend-scroller {
   display: flex;
-  align-items: flex-start;
+  align-items: stretch;
   gap: 0.65rem;
   overflow-x: auto;
   overflow-y: hidden;
@@ -411,64 +411,80 @@ button { cursor: pointer; min-height: var(--tap); }
   scrollbar-width: thin;
 }
 .recommend-item {
-  flex: 0 0 auto;
+  position: relative;
+  flex: 0 0 13.5rem;
+  width: 13.5rem;
+  height: 15.5rem;
   scroll-snap-align: start;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 0.28rem;
-  max-width: 100%;
   margin: 0;
-  padding: 0.4rem 0.45rem 0.5rem;
-  border: 1px solid var(--border);
-  border-radius: 12px;
-  background: #fff;
-  color: var(--ink);
-  text-align: center;
+  padding: 0;
+  overflow: hidden;
+  border: 0;
+  border-radius: 16px;
+  background: #134e4a;
+  color: #fff;
+  text-align: left;
   user-select: none;
 }
 .recommend-item:hover {
-  border-color: var(--brand);
+  filter: brightness(1.06);
 }
-.recommend-item-science { border-color: #86efac; }
-.recommend-item-technology { border-color: #7dd3fc; }
-.recommend-item-engineering { border-color: #fcd34d; }
-.recommend-item-mathematics { border-color: #5eead4; }
-.recommend-thumb {
-  display: block;
-  width: auto;
-  height: auto;
-  max-width: none;
-  border-radius: 8px;
-  background: #f8fafc;
+.recommend-item:focus-visible {
+  outline: 2px solid #fff;
+  outline-offset: 2px;
 }
+.recommend-item-science { background: #166534; }
+.recommend-item-technology { background: #0369a1; }
+.recommend-item-engineering { background: #b45309; }
+.recommend-item-mathematics { background: #0f766e; }
+.recommend-thumb,
 .recommend-fallback {
-  display: grid;
-  place-items: center;
-  width: 4.5rem;
-  height: 4.5rem;
-  border-radius: 8px;
-  font-size: 1.35rem;
-  font-weight: 800;
-  color: var(--brand-dark);
-  background: #f0fdfa;
+  position: absolute;
+  inset: 0;
+  display: block;
+  width: 100%;
+  height: 100%;
+  max-width: none;
+  border-radius: 0;
+  object-fit: cover;
+  pointer-events: none;
 }
-.recommend-fallback-science { background: #dcfce7; }
-.recommend-fallback-technology { background: #e0f2fe; }
-.recommend-fallback-engineering { background: #fef3c7; }
-.recommend-fallback-mathematics { background: #ccfbf1; }
+.recommend-fallback-science { background: #166534; }
+.recommend-fallback-technology { background: #0369a1; }
+.recommend-fallback-engineering { background: #b45309; }
+.recommend-fallback-mathematics { background: #0f766e; }
+.recommend-copy {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 0.12rem;
+  padding: 2.6rem 0.8rem 0.75rem;
+  background: linear-gradient(to top, rgba(6, 20, 18, 0.88) 0%, rgba(6, 20, 18, 0.42) 58%, transparent 100%);
+  pointer-events: none;
+}
 .recommend-caption {
-  max-width: 9rem;
-  font-size: 0.75rem;
-  font-weight: 700;
+  max-width: none;
+  color: #fff;
+  font-size: 0.92rem;
+  font-weight: 800;
   line-height: 1.25;
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.45);
+  display: -webkit-box;
+  -webkit-line-clamp: 4;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
 }
 .recommend-cat {
+  color: #fff;
   font-size: 0.62rem;
   font-weight: 700;
   letter-spacing: 0.04em;
   text-transform: uppercase;
-  color: var(--muted);
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.45);
 }
 
 /* Mastery hub / create wizard */
