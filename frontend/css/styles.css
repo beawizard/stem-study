@@ -1975,9 +1975,40 @@ body.admin-mode .usage-wrap.table-wrap {
   flex-direction: column;
   gap: 0.45rem;
 }
+.sci-interactive-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.6rem;
+}
 .sci-interactive-label {
   font-size: 0.85rem;
   font-weight: 700;
+}
+.sci-interactive-videos {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  flex: 0 0 auto;
+}
+.sci-video-icon-btn {
+  width: 2.5rem;
+  height: 2.5rem;
+  display: grid;
+  place-items: center;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  line-height: 0;
+  text-decoration: none;
+  border-radius: 8px;
+}
+.sci-video-icon-btn .sci-video-brand-icon {
+  width: 2.15rem;
+  height: 2.15rem;
+}
+.sci-video-icon-btn.is-empty {
+  cursor: default;
 }
 .sci-interactive {
   display: block;

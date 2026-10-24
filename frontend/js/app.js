@@ -2050,6 +2050,16 @@ const App = (() => {
       </div>`;
   }
 
+  function scienceVideoIcon(url, kind) {
+    const name = kind === "facebook" ? "Facebook" : "YouTube";
+    const link = String(url || "").trim();
+    const mark = videoBrandMark(kind);
+    if (!link) {
+      return `<span class="sci-video-icon-btn is-empty" title="No ${name} video yet" aria-label="No ${name} video yet">${mark}</span>`;
+    }
+    return `<a class="sci-video-icon-btn" href="${escapeAttr(link)}" target="_blank" rel="noopener noreferrer" title="${name} video" aria-label="Open ${name} video">${mark}</a>`;
+  }
+
   function scienceReaderHtml(detail) {
     const grade = detail.grade_level
       ? `<span class="study-grade-badge">${escapeHtml(detail.grade_level)}</span>`
@@ -2064,16 +2074,22 @@ const App = (() => {
         )}" /></div>`
       : "";
     const htmlUrl = (detail.interactive_html_url || "").trim();
+    const video = (detail.explainer_video_url || "").trim();
+    const facebook = (detail.facebook_video_url || "").trim();
     const interactiveHtml = htmlUrl
       ? `<div class="sci-interactive-wrap">
-          <span class="sci-interactive-label">Interactive lesson</span>
+          <div class="sci-interactive-head">
+            <span class="sci-interactive-label">Interactive lesson</span>
+            <span class="sci-interactive-videos">
+              ${scienceVideoIcon(video, "youtube")}
+              ${scienceVideoIcon(facebook, "facebook")}
+            </span>
+          </div>
           <iframe class="sci-interactive" title="${escapeAttr(
             detail.topic || detail.name || "Interactive lesson"
           )}" src="${escapeAttr(htmlUrl)}" sandbox="allow-scripts allow-forms allow-modals allow-popups allow-popups-to-escape-sandbox" loading="lazy"></iframe>
         </div>`
       : "";
-    const video = (detail.explainer_video_url || "").trim();
-    const facebook = (detail.facebook_video_url || "").trim();
     const videoRows = `${scienceVideoRow(video, "youtube")}${scienceVideoRow(facebook, "facebook")}`;
     const videoHtml = videoRows
       ? `<div class="sci-video-wrap">
