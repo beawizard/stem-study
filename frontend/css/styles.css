@@ -438,7 +438,7 @@ button { cursor: pointer; min-height: var(--tap); }
 .recommend-item-technology { background: #0369a1; }
 .recommend-item-engineering { background: #b45309; }
 .recommend-item-mathematics { background: #0f766e; }
-.recommend-item:has(.recommend-thumb) { background: #0b1220; }
+
 .recommend-preview {
   position: absolute;
   top: -10.5rem;
@@ -465,9 +465,8 @@ button { cursor: pointer; min-height: var(--tap); }
 }
 .recommend-thumb {
   object-fit: cover;
-  object-position: center top;
-  transform: scale(0.94);
-  transform-origin: center center;
+  /* Posters are tall. Shift the crop so the category label sits just under the top edge. */
+  object-position: center 32%;
 }
 .recommend-fallback-science { background: #166534; }
 .recommend-fallback-technology { background: #0369a1; }
