@@ -438,6 +438,7 @@ button { cursor: pointer; min-height: var(--tap); }
 .recommend-item-technology { background: #0369a1; }
 .recommend-item-engineering { background: #b45309; }
 .recommend-item-mathematics { background: #0f766e; }
+.recommend-item:has(.recommend-thumb) { background: #0b1220; }
 .recommend-preview {
   position: absolute;
   top: -10.5rem;
@@ -461,6 +462,12 @@ button { cursor: pointer; min-height: var(--tap); }
   border-radius: 0;
   object-fit: cover;
   pointer-events: none;
+}
+.recommend-thumb {
+  object-fit: cover;
+  object-position: center top;
+  transform: scale(0.94);
+  transform-origin: center center;
 }
 .recommend-fallback-science { background: #166534; }
 .recommend-fallback-technology { background: #0369a1; }
