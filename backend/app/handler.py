@@ -264,6 +264,7 @@ def _route(
             return ok(
                 recommendation_service.set_home_recommendations(
                     data.subject_ids,
+                    thumbnails=data.thumbnails,
                     updated_by=user.user_id,
                 )
             )

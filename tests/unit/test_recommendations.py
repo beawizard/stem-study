@@ -193,6 +193,74 @@ def test_curated_list_overrides_visits_and_can_be_cleared(dynamodb_table, admin_
 
 
 @pytest.mark.unit
+def test_manager_thumbnail_overrides_the_lesson_cover(dynamodb_table, admin_headers, user_headers):
+    _topic(
+        "science-a",
+        "Science",
+        "Plants",
+        science_ready=True,
+        content_kind="lesson",
+        image_url="https://cdn.example/plants.jpg",
+    )
+    _topic("science-b", "Science", "Rocks", science_ready=True, content_kind="lesson")
+
+    rejected = handler(
+        make_event(
+            "PUT",
+            "/recommendations",
+            headers=admin_headers,
+            body=json.dumps(
+                {
+                    "subject_ids": ["science-b"],
+                    "thumbnails": {"science-a": "https://cdn.example/other.jpg"},
+                }
+            ),
+        )
+    )
+    assert rejected["statusCode"] == 422
+
+    bad_url = handler(
+        make_event(
+            "PUT",
+            "/recommendations",
+            headers=admin_headers,
+            body=json.dumps(
+                {
+                    "subject_ids": ["science-b"],
+                    "thumbnails": {"science-b": "javascript:alert(1)"},
+                }
+            ),
+        )
+    )
+    assert bad_url["statusCode"] == 422
+
+    saved = handler(
+        make_event(
+            "PUT",
+            "/recommendations",
+            headers=admin_headers,
+            body=json.dumps(
+                {
+                    "subject_ids": ["science-a", "science-b"],
+                    "thumbnails": {"science-b": "https://cdn.example/rocks.jpg"},
+                }
+            ),
+        )
+    )
+    assert saved["statusCode"] == 200, saved["body"]
+    body = json.loads(saved["body"])
+    by_id = {item["subject_id"]: item for item in body["items"]}
+    assert by_id["science-a"]["image_url"] == "https://cdn.example/plants.jpg"
+    assert by_id["science-b"]["image_url"] == "https://cdn.example/rocks.jpg"
+
+    listed = json.loads(
+        handler(make_event("GET", "/recommendations", headers=user_headers))["body"]
+    )
+    again = {item["subject_id"]: item for item in listed["items"]}
+    assert again["science-b"]["image_url"] == "https://cdn.example/rocks.jpg"
+
+
+@pytest.mark.unit
 def test_first_access_increments_visit_count_once(dynamodb_table):
     _topic("science-plants", "Science", "Plants", science_ready=True, content_kind="lesson")
     user_service.ensure_user_profile("u-ada", email="ada@example.com", nickname="Ada")

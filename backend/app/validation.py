@@ -519,6 +519,9 @@ class RecommendationsUpdate(BaseModel):
     model_config = ConfigDict(str_strip_whitespace=True, extra="forbid")
 
     subject_ids: list[str] = Field(default_factory=list, max_length=24)
+    # Optional manager-supplied picture for a subject in subject_ids.
+    # Omitted ids keep the lesson cover, or the interactive lesson preview.
+    thumbnails: dict[str, str] = Field(default_factory=dict)
 
     @field_validator("subject_ids")
     @classmethod
@@ -533,6 +536,33 @@ class RecommendationsUpdate(BaseModel):
             if sid not in cleaned:
                 cleaned.append(sid)
         return cleaned
+
+    @field_validator("thumbnails")
+    @classmethod
+    def validate_thumbnails(cls, values: dict[str, str]) -> dict[str, str]:
+        cleaned: dict[str, str] = {}
+        for raw_id, raw_url in values.items():
+            sid = str(raw_id or "").strip()
+            url = str(raw_url or "").strip()
+            if not sid and not url:
+                continue
+            if not SUBJECT_ID_PATTERN.match(sid):
+                raise ValueError("Invalid subject_id format")
+            if not url:
+                continue
+            if len(url) > MAX_VIDEO_URL_LEN:
+                raise ValueError("Thumbnail URL is too long")
+            if not (url.startswith("https://") or url.startswith("http://")):
+                raise ValueError("Thumbnail must be an http(s) URL")
+            cleaned[sid] = url
+        return cleaned
+
+    @model_validator(mode="after")
+    def thumbnails_belong_to_the_list(self) -> "RecommendationsUpdate":
+        for sid in self.thumbnails:
+            if sid not in self.subject_ids:
+                raise ValueError(f"Thumbnail is not in subject_ids: '{sid}'")
+        return self
 
 
 class TopicAccessPing(BaseModel):

@@ -1,7 +1,8 @@
 """Home recommended-lesson carousel.
 
 The Melon Manager bot (or an admin) can store an ordered subject list
-with PUT /recommendations. Until that list exists, Home shows the two most
+with PUT /recommendations, and an optional https thumbnail for each id.
+Until that list exists, Home shows the two most
 visited topics in each STEM category. A category with no visits yet contributes
 two topics chosen at random, so a full catalog yields eight cards.
 """
@@ -95,19 +96,26 @@ def _card(item: dict[str, Any], pick: str) -> dict[str, Any]:
     }
 
 
-def _load_curated_ids() -> list[str]:
+def _load_curated() -> tuple[list[str], dict[str, str]]:
     item = db.get_item(keys.recommendations_pk(), keys.recommendations_sk())
     if not item or item.get("deleted_at"):
-        return []
+        return [], {}
     raw = item.get("subject_ids") or []
-    if not isinstance(raw, list):
-        return []
     ids: list[str] = []
-    for sid in raw:
-        text = str(sid or "").strip()
-        if text and text not in ids:
-            ids.append(text)
-    return ids
+    if isinstance(raw, list):
+        for sid in raw:
+            text = str(sid or "").strip()
+            if text and text not in ids:
+                ids.append(text)
+    thumbs: dict[str, str] = {}
+    raw_thumbs = item.get("thumbnails") or {}
+    if isinstance(raw_thumbs, dict):
+        for sid, url in raw_thumbs.items():
+            text = str(sid or "").strip()
+            link = str(url or "").strip()
+            if text and link:
+                thumbs[text] = link
+    return ids, thumbs
 
 
 def _pick_category(
@@ -155,11 +163,17 @@ def list_home_recommendations(rng: random.Random | None = None) -> dict[str, Any
     chooser = rng or random.Random()
     subjects = _raw_subjects()
     by_id = {str(item.get("subject_id") or ""): item for item in subjects}
-    curated_ids = _load_curated_ids()
+    curated_ids, thumbnails = _load_curated()
     if curated_ids:
-        curated = [
-            _card(by_id[sid], "curated") for sid in curated_ids if sid in by_id
-        ]
+        curated = []
+        for sid in curated_ids:
+            if sid not in by_id:
+                continue
+            card = _card(by_id[sid], "curated")
+            override = thumbnails.get(sid, "")
+            if override:
+                card["image_url"] = override
+            curated.append(card)
         if curated:
             return {"source": "curated", "items": curated}
     items, source = _auto_items(subjects, chooser)
@@ -167,9 +181,16 @@ def list_home_recommendations(rng: random.Random | None = None) -> dict[str, Any
 
 
 def set_home_recommendations(
-    subject_ids: list[str], *, updated_by: str = ""
+    subject_ids: list[str],
+    *,
+    thumbnails: dict[str, str] | None = None,
+    updated_by: str = "",
 ) -> dict[str, Any]:
-    """Replace the curated carousel. An empty list restores automatic picks."""
+    """Replace the curated carousel. An empty list restores automatic picks.
+
+    thumbnails maps a subject id to an http(s) picture. A missing id keeps
+    the lesson cover, or the interactive lesson when there is no cover.
+    """
     subjects = _raw_subjects()
     by_id = {str(item.get("subject_id") or ""): item for item in subjects}
     clean: list[str] = []
@@ -180,6 +201,17 @@ def set_home_recommendations(
         if sid not in by_id:
             raise ValueError(f"Unknown topic '{sid}'")
         clean.append(sid)
+    clean_thumbs: dict[str, str] = {}
+    for raw_id, raw_url in (thumbnails or {}).items():
+        sid = str(raw_id or "").strip()
+        url = str(raw_url or "").strip()
+        if not sid or not url:
+            continue
+        if sid not in clean:
+            raise ValueError(f"Thumbnail is not in subject_ids: '{sid}'")
+        if not (url.startswith("https://") or url.startswith("http://")):
+            raise ValueError("Thumbnail must be an http(s) URL")
+        clean_thumbs[sid] = url
 
     pk = keys.recommendations_pk()
     sk = keys.recommendations_sk()
@@ -196,6 +228,7 @@ def set_home_recommendations(
             "SK": sk,
             "entity_type": "RECOMMENDATIONS",
             "subject_ids": clean,
+            "thumbnails": clean_thumbs,
             "updated_at": now,
             "updated_by": updated_by or "",
             "deleted_at": "",
