@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import random
 
+import boto3
 import pytest
 
 from app import db, keys
@@ -192,8 +193,24 @@ def test_curated_list_overrides_visits_and_can_be_cleared(dynamodb_table, admin_
     assert _ids_for(again, "Science") == ["science-a", "science-b"]
 
 
+_PNG_B64 = (
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=="
+)
+
+
+def _s3_env(monkeypatch):
+    monkeypatch.setenv("FRONTEND_BUCKET", "stem-test-frontend")
+    monkeypatch.setenv("FRONTEND_PUBLIC_BASE", "http://example.com")
+    s3 = boto3.client("s3", region_name="ap-southeast-1")
+    s3.create_bucket(
+        Bucket="stem-test-frontend",
+        CreateBucketConfiguration={"LocationConstraint": "ap-southeast-1"},
+    )
+
+
 @pytest.mark.unit
-def test_manager_thumbnail_overrides_the_lesson_cover(dynamodb_table, admin_headers, user_headers):
+def test_manager_thumbnail_image_is_stored_and_kept(dynamodb_table, admin_headers, user_headers, monkeypatch):
+    _s3_env(monkeypatch)
     _topic(
         "science-a",
         "Science",
@@ -212,7 +229,7 @@ def test_manager_thumbnail_overrides_the_lesson_cover(dynamodb_table, admin_head
             body=json.dumps(
                 {
                     "subject_ids": ["science-b"],
-                    "thumbnails": {"science-a": "https://cdn.example/other.jpg"},
+                    "thumbnails": {"science-a": _PNG_B64},
                 }
             ),
         )
@@ -227,7 +244,7 @@ def test_manager_thumbnail_overrides_the_lesson_cover(dynamodb_table, admin_head
             body=json.dumps(
                 {
                     "subject_ids": ["science-b"],
-                    "thumbnails": {"science-b": "javascript:alert(1)"},
+                    "thumbnails": {"science-b": "https://cdn.example/rocks.jpg"},
                 }
             ),
         )
@@ -242,7 +259,7 @@ def test_manager_thumbnail_overrides_the_lesson_cover(dynamodb_table, admin_head
             body=json.dumps(
                 {
                     "subject_ids": ["science-a", "science-b"],
-                    "thumbnails": {"science-b": "https://cdn.example/rocks.jpg"},
+                    "thumbnails": {"science-b": _PNG_B64},
                 }
             ),
         )
@@ -251,13 +268,27 @@ def test_manager_thumbnail_overrides_the_lesson_cover(dynamodb_table, admin_head
     body = json.loads(saved["body"])
     by_id = {item["subject_id"]: item for item in body["items"]}
     assert by_id["science-a"]["image_url"] == "https://cdn.example/plants.jpg"
-    assert by_id["science-b"]["image_url"] == "https://cdn.example/rocks.jpg"
+    rocks = by_id["science-b"]["image_url"]
+    assert rocks.startswith("http://example.com/science/science-b/carousel/")
+    assert rocks.endswith(".png")
 
-    listed = json.loads(
-        handler(make_event("GET", "/recommendations", headers=user_headers))["body"]
+    kept = handler(
+        make_event(
+            "PUT",
+            "/recommendations",
+            headers=admin_headers,
+            body=json.dumps({"subject_ids": ["science-b"]}),
+        )
     )
-    again = {item["subject_id"]: item for item in listed["items"]}
-    assert again["science-b"]["image_url"] == "https://cdn.example/rocks.jpg"
+    assert kept["statusCode"] == 200, kept["body"]
+    kept_body = json.loads(kept["body"])
+    assert kept_body["items"][0]["image_url"] == rocks
+
+    s3 = boto3.client("s3", region_name="ap-southeast-1")
+    key = rocks.removeprefix("http://example.com/")
+    stored = s3.get_object(Bucket="stem-test-frontend", Key=key)
+    assert stored["ContentType"] == "image/png"
+    assert stored["Body"].read().startswith(b"\x89PNG")
 
 
 @pytest.mark.unit

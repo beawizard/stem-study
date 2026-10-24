@@ -13,6 +13,11 @@ MAX_TITLE_LEN = 200
 MAX_DESC_LEN = 2000
 MAX_SUMMARY_LEN = 4000
 MAX_VIDEO_URL_LEN = 1000
+# One carousel picture. Eight to twenty-four of these must still fit in one
+# Lambda request (about 6 MB), so this is a thumbnail, not a full photo.
+MAX_THUMB_BYTES = 400_000
+MAX_THUMB_TEXT = 560_000
+MAX_THUMB_BATCH_TEXT = 5_000_000
 MAX_SUBJECT_ID_LEN = 64
 MAX_LEVEL_ID_LEN = 64
 MAX_CSV_ROWS = 5000
@@ -519,8 +524,9 @@ class RecommendationsUpdate(BaseModel):
     model_config = ConfigDict(str_strip_whitespace=True, extra="forbid")
 
     subject_ids: list[str] = Field(default_factory=list, max_length=24)
-    # Optional manager-supplied picture for a subject in subject_ids.
-    # Omitted ids keep the lesson cover, or the interactive lesson preview.
+    # Optional PNG or JPEG for a subject in subject_ids, as base64
+    # (or a data:image/...;base64 URL). Omitted ids keep the picture
+    # already stored for that lesson.
     thumbnails: dict[str, str] = Field(default_factory=dict)
 
     @field_validator("subject_ids")
@@ -541,20 +547,22 @@ class RecommendationsUpdate(BaseModel):
     @classmethod
     def validate_thumbnails(cls, values: dict[str, str]) -> dict[str, str]:
         cleaned: dict[str, str] = {}
-        for raw_id, raw_url in values.items():
+        for raw_id, raw_image in values.items():
             sid = str(raw_id or "").strip()
-            url = str(raw_url or "").strip()
-            if not sid and not url:
+            image = str(raw_image or "").strip()
+            if not sid and not image:
                 continue
             if not SUBJECT_ID_PATTERN.match(sid):
                 raise ValueError("Invalid subject_id format")
-            if not url:
+            if not image:
                 continue
-            if len(url) > MAX_VIDEO_URL_LEN:
-                raise ValueError("Thumbnail URL is too long")
-            if not (url.startswith("https://") or url.startswith("http://")):
-                raise ValueError("Thumbnail must be an http(s) URL")
-            cleaned[sid] = url
+            decode_thumbnail_image(image)
+            cleaned[sid] = image
+        if sum(len(image) for image in cleaned.values()) > MAX_THUMB_BATCH_TEXT:
+            raise ValueError(
+                "Thumbnails together are too large for one request. "
+                "Send smaller JPEG files, or fewer images at a time."
+            )
         return cleaned
 
     @model_validator(mode="after")
@@ -637,6 +645,40 @@ class PaymentVerify(BaseModel):
 
     status: str = Field(..., pattern=r"^(verified|rejected)$")
     notes: str = Field(default="", max_length=500)
+
+
+def decode_thumbnail_image(raw: str) -> tuple[bytes, str, str]:
+    """Return PNG or JPEG bytes, file extension, and content type.
+
+    Accepts plain base64 or a data:image/...;base64 URL. Rejects http(s) links.
+    """
+    import base64
+    import binascii
+
+    text = "".join(str(raw or "").split())
+    lowered = text.lower()
+    if lowered.startswith("http://") or lowered.startswith("https://"):
+        raise ValueError("Thumbnail must be a PNG or JPEG image, not a URL")
+    if lowered.startswith("data:"):
+        comma = text.find(",")
+        if comma < 0 or ";base64" not in lowered[:comma]:
+            raise ValueError("Thumbnail image is not valid base64")
+        text = text[comma + 1 :]
+    if len(text) > MAX_THUMB_TEXT:
+        raise ValueError("Thumbnail image must be 400 KB or smaller")
+    try:
+        data = base64.b64decode(text, validate=True)
+    except (binascii.Error, ValueError) as exc:
+        raise ValueError("Thumbnail image is not valid base64") from exc
+    if not data:
+        raise ValueError("Thumbnail image is empty")
+    if len(data) > MAX_THUMB_BYTES:
+        raise ValueError("Thumbnail image must be 400 KB or smaller")
+    if data.startswith(b"\x89PNG\r\n\x1a\n"):
+        return data, "png", "image/png"
+    if data.startswith(b"\xff\xd8\xff"):
+        return data, "jpg", "image/jpeg"
+    raise ValueError("Thumbnail must be a PNG or JPEG image")
 
 
 def parse_body(model_cls: type[BaseModel], raw: str | bytes | None) -> BaseModel:

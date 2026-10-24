@@ -1,7 +1,7 @@
 """Home recommended-lesson carousel.
 
 The Melon Manager bot (or an admin) can store an ordered subject list
-with PUT /recommendations, and an optional https thumbnail for each id.
+with PUT /recommendations, and an optional PNG or JPEG thumbnail for each id.
 Until that list exists, Home shows the two most
 visited topics in each STEM category. A category with no visits yet contributes
 two topics chosen at random, so a full catalog yields eight cards.
@@ -180,6 +180,40 @@ def list_home_recommendations(rng: random.Random | None = None) -> dict[str, Any
     return {"source": source, "items": items}
 
 
+_THUMB_PREFIX = {
+    "Science": "science",
+    "Technology": "technology",
+    "Engineering": "engineering",
+    "Mathematics": "mathematics",
+}
+
+
+def _store_thumbnail(subject: dict[str, Any], raw_image: str) -> str:
+    """Save a manager thumbnail under the lesson prefix and return its URL."""
+    from app.services.science_service import ScienceError, _bucket, _object_url, _s3
+    from app.validation import decode_thumbnail_image
+
+    data, ext, content_type = decode_thumbnail_image(raw_image)
+    category = _subject_category(subject)
+    prefix = _THUMB_PREFIX.get(category)
+    if not prefix:
+        raise ValueError(f"No thumbnail folder for category '{category}'")
+    subject_id = str(subject.get("subject_id") or "").strip()
+    stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
+    key = f"{prefix}/{subject_id}/carousel/{stamp}.{ext}"
+    try:
+        _s3().put_object(
+            Bucket=_bucket(),
+            Key=key,
+            Body=data,
+            ContentType=content_type,
+            CacheControl="public, max-age=31536000, immutable",
+        )
+    except ScienceError as exc:
+        raise ValueError(str(exc)) from exc
+    return _object_url(key)
+
+
 def set_home_recommendations(
     subject_ids: list[str],
     *,
@@ -188,8 +222,10 @@ def set_home_recommendations(
 ) -> dict[str, Any]:
     """Replace the curated carousel. An empty list restores automatic picks.
 
-    thumbnails maps a subject id to an http(s) picture. A missing id keeps
-    the lesson cover, or the interactive lesson when there is no cover.
+    thumbnails maps a subject id to a base64 PNG or JPEG. The file is stored
+    beside that lesson and the card uses its public URL. A missing id keeps
+    the thumbnail already saved for it, then the lesson cover, then the
+    interactive lesson.
     """
     subjects = _raw_subjects()
     by_id = {str(item.get("subject_id") or ""): item for item in subjects}
@@ -201,17 +237,19 @@ def set_home_recommendations(
         if sid not in by_id:
             raise ValueError(f"Unknown topic '{sid}'")
         clean.append(sid)
+    _, previous = _load_curated()
     clean_thumbs: dict[str, str] = {}
-    for raw_id, raw_url in (thumbnails or {}).items():
+    for sid in clean:
+        if sid in previous:
+            clean_thumbs[sid] = previous[sid]
+    for raw_id, raw_image in (thumbnails or {}).items():
         sid = str(raw_id or "").strip()
-        url = str(raw_url or "").strip()
-        if not sid or not url:
+        image = str(raw_image or "").strip()
+        if not sid or not image:
             continue
-        if sid not in clean:
+        if sid not in by_id or sid not in clean:
             raise ValueError(f"Thumbnail is not in subject_ids: '{sid}'")
-        if not (url.startswith("https://") or url.startswith("http://")):
-            raise ValueError("Thumbnail must be an http(s) URL")
-        clean_thumbs[sid] = url
+        clean_thumbs[sid] = _store_thumbnail(by_id[sid], image)
 
     pk = keys.recommendations_pk()
     sk = keys.recommendations_sk()
