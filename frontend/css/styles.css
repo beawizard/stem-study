@@ -425,6 +425,7 @@ button { cursor: pointer; min-height: var(--tap); }
   color: #fff;
   text-align: left;
   user-select: none;
+  cursor: pointer;
 }
 .recommend-item:hover {
   filter: brightness(1.06);
@@ -437,6 +438,18 @@ button { cursor: pointer; min-height: var(--tap); }
 .recommend-item-technology { background: #0369a1; }
 .recommend-item-engineering { background: #b45309; }
 .recommend-item-mathematics { background: #0f766e; }
+.recommend-preview {
+  position: absolute;
+  top: -10.5rem;
+  left: 0;
+  width: 200%;
+  height: 360%;
+  border: 0;
+  transform: scale(0.5);
+  transform-origin: top left;
+  pointer-events: none;
+  background: #fff;
+}
 .recommend-thumb,
 .recommend-fallback {
   position: absolute;
@@ -462,7 +475,7 @@ button { cursor: pointer; min-height: var(--tap); }
   display: flex;
   flex-direction: column;
   gap: 0.12rem;
-  padding: 2.6rem 0.8rem 0.75rem;
+  padding: 1.6rem 0.8rem 0.65rem;
   background: linear-gradient(to top, rgba(6, 20, 18, 0.88) 0%, rgba(6, 20, 18, 0.42) 58%, transparent 100%);
   pointer-events: none;
 }
@@ -474,7 +487,7 @@ button { cursor: pointer; min-height: var(--tap); }
   line-height: 1.25;
   text-shadow: 0 1px 2px rgba(0, 0, 0, 0.45);
   display: -webkit-box;
-  -webkit-line-clamp: 4;
+  -webkit-line-clamp: 3;
   -webkit-box-orient: vertical;
   overflow: hidden;
 }

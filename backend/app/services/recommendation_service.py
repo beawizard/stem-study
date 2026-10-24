@@ -48,6 +48,22 @@ def _eligible(item: dict[str, Any]) -> bool:
     return bool(item.get("science_ready"))
 
 
+def _html_url(item: dict[str, Any]) -> str:
+    """Interactive lesson page, used as the carousel picture when there is no cover."""
+    url = str(item.get("html_url") or item.get("interactive_html_url") or "").strip()
+    if url:
+        return url
+    key = str(item.get("html_key") or "").strip().lstrip("/")
+    if not key:
+        return ""
+    try:
+        from app.services.science_service import _object_url
+
+        return _object_url(key)
+    except Exception:
+        return ""
+
+
 def _image_url(item: dict[str, Any]) -> str:
     """Cover image, or the first Technology slide when there is no cover."""
     url = str(item.get("image_url") or "").strip()
@@ -72,6 +88,7 @@ def _card(item: dict[str, Any], pick: str) -> dict[str, Any]:
         "category": _subject_category(item),
         "topic": _subject_topic(item),
         "image_url": _image_url(item),
+        "interactive_html_url": _html_url(item),
         "grade_level": str(item.get("grade_level") or "").strip(),
         "visit_count": int(item.get("visit_count") or 0),
         "pick": pick,

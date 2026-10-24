@@ -1298,12 +1298,17 @@ const App = (() => {
         const topic = String(item.topic || item.name || subjectId || "Lesson");
         const slug = category.toLowerCase().replace(/[^a-z]/g, "") || "lesson";
         const imageUrl = String(item.image_url || "").trim();
+        const htmlUrl = String(item.interactive_html_url || "").trim();
         const visual = imageUrl
           ? `<img class="recommend-thumb" src="${escapeAttr(
               imageUrl
             )}" alt="" draggable="false" />`
-          : `<span class="recommend-fallback recommend-fallback-${slug}" aria-hidden="true"></span>`;
-        return `<button type="button" class="recommend-item recommend-item-${slug}" role="listitem"
+          : htmlUrl
+            ? `<iframe class="recommend-preview" title="" aria-hidden="true" tabindex="-1"
+                src="${escapeAttr(htmlUrl)}" loading="lazy" scrolling="no"
+                sandbox="allow-scripts"></iframe>`
+            : `<span class="recommend-fallback recommend-fallback-${slug}" aria-hidden="true"></span>`;
+        return `<div class="recommend-item recommend-item-${slug}" role="listitem" tabindex="0"
             data-recommend-subject="${escapeAttr(subjectId)}"
             data-recommend-category="${escapeAttr(category)}"
             aria-label="Open ${escapeAttr(topic)}">
@@ -1312,7 +1317,7 @@ const App = (() => {
               <span class="recommend-caption">${escapeHtml(topic)}</span>
               <span class="recommend-cat">${escapeHtml(category)}</span>
             </span>
-          </button>`;
+          </div>`;
       })
       .join("");
     return `
@@ -1381,17 +1386,24 @@ const App = (() => {
     if (prev) prev.onclick = () => scroller.scrollBy({ left: -page(), behavior: "smooth" });
     if (next) next.onclick = () => scroller.scrollBy({ left: page(), behavior: "smooth" });
 
-    scroller.querySelectorAll("[data-recommend-subject]").forEach((button) => {
-      button.addEventListener("click", (event) => {
+    scroller.querySelectorAll("[data-recommend-subject]").forEach((card) => {
+      const open = () =>
+        openRecommendedLesson(
+          card.getAttribute("data-recommend-subject"),
+          card.getAttribute("data-recommend-category")
+        );
+      card.addEventListener("click", (event) => {
         if (scroller.dataset.swiped === "1") {
           event.preventDefault();
           scroller.dataset.swiped = "";
           return;
         }
-        openRecommendedLesson(
-          button.getAttribute("data-recommend-subject"),
-          button.getAttribute("data-recommend-category")
-        );
+        open();
+      });
+      card.addEventListener("keydown", (event) => {
+        if (event.key !== "Enter" && event.key !== " ") return;
+        event.preventDefault();
+        open();
       });
     });
   }

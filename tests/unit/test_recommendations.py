@@ -99,11 +99,38 @@ def test_auto_uses_top_two_visited_when_counts_exist(dynamodb_table):
     assert _ids_for(body, "Technology") == ["technology-other", "technology-show"]
     assert _ids_for(body, "Engineering") == ["engineering-only"]
     assert _ids_for(body, "Mathematics") == ["mathematics-add"]
-
     tech = next(item for item in body["items"] if item["subject_id"] == "technology-show")
     assert tech["image_url"] == "https://cdn.example/first.jpg"
+    assert tech["interactive_html_url"] == ""
     cover = next(item for item in body["items"] if item["subject_id"] == "technology-other")
     assert cover["image_url"] == "https://cdn.example/cover.jpg"
+
+@pytest.mark.unit
+def test_card_includes_interactive_html_when_there_is_no_cover(dynamodb_table, monkeypatch):
+    monkeypatch.setenv("FRONTEND_PUBLIC_BASE", "https://cdn.example")
+    _topic(
+        "science-quakes",
+        "Science",
+        "Earthquakes",
+        science_ready=True,
+        content_kind="lesson",
+        html_url="https://cdn.example/science/quakes/interactive.html",
+    )
+    _topic(
+        "science-key",
+        "Science",
+        "Keyed",
+        science_ready=True,
+        content_kind="lesson",
+        html_key="science/science-key/interactive.html",
+        visit_count=2,
+    )
+    body = recommendation_service.list_home_recommendations(rng=random.Random(0))
+    quakes = next(item for item in body["items"] if item["subject_id"] == "science-quakes")
+    keyed = next(item for item in body["items"] if item["subject_id"] == "science-key")
+    assert quakes["image_url"] == ""
+    assert quakes["interactive_html_url"] == "https://cdn.example/science/quakes/interactive.html"
+    assert keyed["interactive_html_url"] == "https://cdn.example/science/science-key/interactive.html"
 
 
 @pytest.mark.unit
