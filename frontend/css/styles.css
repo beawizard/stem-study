@@ -2014,6 +2014,23 @@ body.admin-mode .usage-wrap.table-wrap {
   padding: 0.28rem 0.7rem;
   border-radius: 999px;
 }
+.sci-video-row {
+  display: flex;
+  align-items: center;
+  gap: 0.65rem;
+}
+.sci-video-brand {
+  flex: 0 0 2.4rem;
+  width: 2.4rem;
+  height: 2.4rem;
+  display: grid;
+  place-items: center;
+}
+.sci-video-brand-icon {
+  width: 2.4rem;
+  height: 2.4rem;
+  display: block;
+}
 .sci-video-link,
 .sci-video-field input {
   display: block;
@@ -2029,6 +2046,12 @@ body.admin-mode .usage-wrap.table-wrap {
   border-radius: 12px;
   padding: 0.75rem 0.85rem;
   box-shadow: 0 2px 0 var(--brand);
+}
+.sci-video-row .sci-video-link,
+.sci-video-row input {
+  flex: 1 1 auto;
+  width: auto;
+  min-width: 0;
 }
 .sci-video-link {
   text-decoration: underline;

@@ -115,6 +115,7 @@ def start_topic_upload(data: ScienceTopicCreate, *, admin_user_id: str) -> dict[
 
     summary = (data.summary or "").strip()
     video = (data.explainer_video_url or "").strip()
+    facebook = (data.facebook_video_url or "").strip()
     desc = summary[:MAX_DESC_LEN]
 
     if existing:
@@ -198,6 +199,7 @@ def start_topic_upload(data: ScienceTopicCreate, *, admin_user_id: str) -> dict[
             "science_ready": False,
             "summary": summary,
             "explainer_video_url": video,
+            "facebook_video_url": facebook,
             "image_key": image_key,
             "image_url": image_url,
             "html_key": html_key,
@@ -256,6 +258,7 @@ def public_science_topic(item: dict[str, Any]) -> dict[str, Any]:
             )
             or "",
             "explainer_video_url": item.get("explainer_video_url") or "",
+            "facebook_video_url": item.get("facebook_video_url") or "",
             "image_url": item.get("image_url") or (_object_url(img_key) if img_key else ""),
             "interactive_html_url": html_url,
         }

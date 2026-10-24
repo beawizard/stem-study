@@ -409,6 +409,7 @@ class ScienceTopicCreate(BaseModel):
     grade_level: str | None = Field(default=None, max_length=32)
     summary: str = Field(default="", max_length=MAX_SUMMARY_LEN)
     explainer_video_url: str = Field(default="", max_length=MAX_VIDEO_URL_LEN)
+    facebook_video_url: str = Field(default="", max_length=MAX_VIDEO_URL_LEN)
     image_ext: str = Field(default="", max_length=8)
     image_content_type: str = Field(default="", max_length=80)
     html_ext: str = Field(default="", max_length=8)
@@ -432,12 +433,12 @@ class ScienceTopicCreate(BaseModel):
     @field_validator("explainer_video_url")
     @classmethod
     def validate_video_url(cls, v: str) -> str:
-        raw = (v or "").strip()
-        if not raw:
-            return ""
-        if not (raw.startswith("http://") or raw.startswith("https://")):
-            raise ValueError("Explainer video must be an http(s) URL")
-        return raw
+        return _http_url(v, "Explainer video must be an http(s) URL")
+
+    @field_validator("facebook_video_url")
+    @classmethod
+    def validate_facebook_video_url(cls, v: str) -> str:
+        return _http_url(v, "Facebook video must be an http(s) URL")
 
 
 class TechnologyTopicCreate(BaseModel):
@@ -645,6 +646,15 @@ class PaymentVerify(BaseModel):
 
     status: str = Field(..., pattern=r"^(verified|rejected)$")
     notes: str = Field(default="", max_length=500)
+
+
+def _http_url(value: str, message: str) -> str:
+    raw = (value or "").strip()
+    if not raw:
+        return ""
+    if not (raw.startswith("http://") or raw.startswith("https://")):
+        raise ValueError(message)
+    return raw
 
 
 def decode_thumbnail_image(raw: str) -> tuple[bytes, str, str]:

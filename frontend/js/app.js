@@ -2033,6 +2033,23 @@ const App = (() => {
       </div>`;
   }
 
+  function videoBrandMark(kind) {
+    if (kind === "facebook") {
+      return `<svg class="sci-video-brand-icon" viewBox="0 0 24 24" aria-hidden="true"><rect width="24" height="24" rx="6" fill="#1877F2"/><path fill="#fff" d="M15.2 8.4h-1.5c-.4 0-.6.3-.6.7v1.2h2.1l-.3 2.2h-1.8V19h-2.3v-6.5H9.2v-2.2h1.6V9.1c0-1.7 1-2.7 2.7-2.7.8 0 1.5.1 1.7.2v1.8z"/></svg>`;
+    }
+    return `<svg class="sci-video-brand-icon" viewBox="0 0 24 24" aria-hidden="true"><rect x="1" y="4.5" width="22" height="15" rx="4" fill="#FF0000"/><path fill="#fff" d="M10 9.2v5.6l5.2-2.8L10 9.2z"/></svg>`;
+  }
+
+  function scienceVideoRow(url, kind) {
+    const link = String(url || "").trim();
+    if (!link) return "";
+    const name = kind === "facebook" ? "Facebook" : "YouTube";
+    return `<div class="sci-video-row">
+        <span class="sci-video-brand" title="${name}">${videoBrandMark(kind)}</span>
+        <a class="sci-video-link" href="${escapeAttr(link)}" target="_blank" rel="noopener noreferrer">${escapeHtml(link)}</a>
+      </div>`;
+  }
+
   function scienceReaderHtml(detail) {
     const grade = detail.grade_level
       ? `<span class="study-grade-badge">${escapeHtml(detail.grade_level)}</span>`
@@ -2056,12 +2073,12 @@ const App = (() => {
         </div>`
       : "";
     const video = (detail.explainer_video_url || "").trim();
-    const videoHtml = video
+    const facebook = (detail.facebook_video_url || "").trim();
+    const videoRows = `${scienceVideoRow(video, "youtube")}${scienceVideoRow(facebook, "facebook")}`;
+    const videoHtml = videoRows
       ? `<div class="sci-video-wrap">
           <span class="sci-video-label">Explainer video</span>
-          <a class="sci-video-link" href="${escapeAttr(video)}" target="_blank" rel="noopener noreferrer">${escapeHtml(
-            video
-          )}</a>
+          ${videoRows}
         </div>`
       : "";
     const emptyHtml =
@@ -3809,8 +3826,15 @@ const App = (() => {
             <p class="muted" id="sci-html-hint" style="margin:0.35rem 0 0">Optional. Upload a self-contained .html lesson (example: microplastics interactive).</p>
           </div>
           <div class="sci-video-field">
-            <label for="sci-video">Explainer video</label>
-            <input id="sci-video" type="url" maxlength="1000" placeholder="https://…" />
+            <span class="sci-video-label">Explainer video</span>
+            <div class="sci-video-row">
+              <span class="sci-video-brand" title="YouTube">${videoBrandMark("youtube")}</span>
+              <input id="sci-video" type="url" maxlength="1000" placeholder="YouTube link" aria-label="YouTube link" />
+            </div>
+            <div class="sci-video-row">
+              <span class="sci-video-brand" title="Facebook">${videoBrandMark("facebook")}</span>
+              <input id="sci-facebook-video" type="url" maxlength="1000" placeholder="Facebook link" aria-label="Facebook link" />
+            </div>
           </div>
           <label class="check-row">
             <input type="checkbox" id="sci-replace" />
@@ -7449,12 +7473,14 @@ const App = (() => {
         const cat = state.adminUploadCategory || "Science";
         const summaryEl = document.getElementById("sci-summary");
         const videoEl = document.getElementById("sci-video");
+        const facebookEl = document.getElementById("sci-facebook-video");
         const gradeEl = document.getElementById("sci-grade-level");
         const htmlHint = document.getElementById("sci-html-hint");
         if (!v) {
           if (sciTopicName) sciTopicName.value = "";
           if (summaryEl) summaryEl.value = "";
           if (videoEl) videoEl.value = "";
+          if (facebookEl) facebookEl.value = "";
           if (htmlHint) {
             htmlHint.textContent =
               "Optional. Upload a self-contained .html lesson (example: microplastics interactive).";
@@ -7472,6 +7498,7 @@ const App = (() => {
           if (gradeEl && found.grade_level) gradeEl.value = found.grade_level;
           if (summaryEl) summaryEl.value = found.summary || found.description || "";
           if (videoEl) videoEl.value = found.explainer_video_url || "";
+          if (facebookEl) facebookEl.value = found.facebook_video_url || "";
           if (htmlHint) {
             htmlHint.textContent = found.interactive_html_url
               ? "This topic already has interactive HTML. Choose a file to replace it."
@@ -7493,6 +7520,7 @@ const App = (() => {
         const grade = (document.getElementById("sci-grade-level")?.value || "").trim();
         const summary = (document.getElementById("sci-summary")?.value || "").trim();
         const video = (document.getElementById("sci-video")?.value || "").trim();
+        const facebook = (document.getElementById("sci-facebook-video")?.value || "").trim();
         const imageInput = document.getElementById("sci-image");
         const file = imageInput && imageInput.files && imageInput.files[0];
         const htmlInput = document.getElementById("sci-html");
@@ -7517,7 +7545,11 @@ const App = (() => {
           return;
         }
         if (video && !/^https?:\/\//i.test(video)) {
-          toast("Explainer video must be an http(s) URL.", true);
+          toast("YouTube link must be an http(s) URL.", true);
+          return;
+        }
+        if (facebook && !/^https?:\/\//i.test(facebook)) {
+          toast("Facebook link must be an http(s) URL.", true);
           return;
         }
         if (submitBtn) submitBtn.disabled = true;
@@ -7537,6 +7569,7 @@ const App = (() => {
             grade_level: grade || null,
             summary,
             explainer_video_url: video,
+            facebook_video_url: facebook,
             replace,
           };
           if (file) {

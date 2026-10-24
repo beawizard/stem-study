@@ -34,6 +34,7 @@ def _start_body(**overrides):
         "grade_level": "Grade 3",
         "summary": "Plants make food with sunlight.\nThey need water and air.",
         "explainer_video_url": "https://www.youtube.com/watch?v=abc123",
+        "facebook_video_url": "https://www.facebook.com/watch/?v=123",
         "image_ext": "png",
         "image_content_type": "image/png",
         "replace": False,
@@ -59,6 +60,8 @@ def test_science_topic_create_validation():
         ScienceTopicCreate(topic="X", category="History")
     with pytest.raises(Exception):
         ScienceTopicCreate(topic="Plants", explainer_video_url="youtube.com/watch")
+    with pytest.raises(Exception):
+        ScienceTopicCreate(topic="Plants", facebook_video_url="facebook.com/watch")
     with pytest.raises(Exception):
         ScienceTopicCreate(topic="")
 
@@ -113,6 +116,7 @@ def test_science_topic_roundtrip(dynamodb_table, admin_headers, user_headers, mo
     ready = json.loads(done["body"])
     assert ready["science_ready"] is True
     assert ready["explainer_video_url"] == "https://www.youtube.com/watch?v=abc123"
+    assert ready["facebook_video_url"] == "https://www.facebook.com/watch/?v=123"
     assert "science/science-plants/cover.png" in ready["image_url"]
 
     listed = handler(make_event("GET", "/science/topics", headers=user_headers))
@@ -130,6 +134,7 @@ def test_science_topic_roundtrip(dynamodb_table, admin_headers, user_headers, mo
     assert "sunlight" in body["summary"]
     assert body["image_url"]
     assert body["explainer_video_url"].startswith("https://")
+    assert body["facebook_video_url"] == "https://www.facebook.com/watch/?v=123"
 
 
 @pytest.mark.unit
