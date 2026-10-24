@@ -1267,6 +1267,17 @@ const App = (() => {
     return "math";
   }
 
+  async function ensureRecommendedLessons() {
+    if (state.recommendedLoaded) return;
+    try {
+      const rec = await Api.recommendations(token());
+      state.recommendedLessons = Array.isArray(rec && rec.items) ? rec.items : [];
+      state.recommendedLoaded = true;
+    } catch {
+      state.recommendedLessons = [];
+    }
+  }
+
   function openRecommendedLesson(subjectId, category) {
     const sid = String(subjectId || "").trim();
     if (!sid) return;
@@ -1848,7 +1859,8 @@ const App = (() => {
         <h1>Study</h1>
         <p class="muted">Choose a STEM area to begin.</p>
         <div class="stem-tile-grid">${cards}</div>
-      </div>`;
+      </div>
+      ${recommendedLessonsHtml(state.recommendedLessons)}`;
   }
 
   async function viewStudyTechnology() {
@@ -2158,6 +2170,7 @@ const App = (() => {
       }
 
       if (!state.studyView || state.studyView === "hub") {
+        await ensureRecommendedLessons();
         return await viewStudyHub();
       }
       if (state.studyView === "tech") {
@@ -5781,15 +5794,7 @@ const App = (() => {
         } catch {
           boardEntries = [];
         }
-        if (!state.recommendedLoaded) {
-          try {
-            const rec = await Api.recommendations(token());
-            state.recommendedLessons = Array.isArray(rec && rec.items) ? rec.items : [];
-            state.recommendedLoaded = true;
-          } catch {
-            state.recommendedLessons = [];
-          }
-        }
+        await ensureRecommendedLessons();
         html = viewHome(boardEntries);
         break;
     }
