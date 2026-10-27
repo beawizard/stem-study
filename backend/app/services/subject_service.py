@@ -20,7 +20,12 @@ from app.vedic import (
     parse_ismc_mcq,
     parse_vedic_mcq,
 )
-from app.playlists import playlist_fields_for_model, playlist_update_from_payload, public_playlist_fields
+from app.playlists import (
+    PLAYLIST_FIELD_NAMES,
+    playlist_fields_for_model,
+    playlist_update_from_payload,
+    public_playlist_fields,
+)
 from app.validation import LevelCreate, STEM_CATEGORIES, SubjectCreate, parse_csv_questions
 
 
@@ -154,6 +159,15 @@ def update_subject(subject_id: str, data) -> dict[str, Any]:
     if "grade_level" in payload and payload["grade_level"] is not None:
         # Empty string clears the tag
         updates["grade_level"] = str(payload["grade_level"] or "").strip()
+    category_now = updates.get("category") or existing.get("category") or ""
+    if str(category_now) == "Mathematics":
+        touched = [
+            name
+            for name in PLAYLIST_FIELD_NAMES
+            if name in payload and payload[name] is not None
+        ]
+        if touched:
+            raise ValueError("Mathematics topics do not use playlists")
     playlist_updates = playlist_update_from_payload(existing, payload)
     if playlist_updates:
         updates.update(playlist_updates)

@@ -47,11 +47,20 @@ def clean_playlist_id(value: str | None) -> str | None:
 def clean_playlist_name(value: str | None) -> str | None:
     if value is None:
         return None
-    return str(value).strip()
+    raw = str(value).strip()
+    if any(ord(ch) < 32 or ord(ch) == 127 for ch in raw):
+        raise ValueError("playlist_name cannot contain line breaks or control characters")
+    return raw
 
 
 def normalize_reel_url(url: str) -> str:
-    """Stable match key for a Facebook Reel or watch URL."""
+    """Stable match key for a Facebook Reel or watch URL.
+
+    fb.watch and facebook.com/share/r/ links are short redirects. The path is
+    an opaque code, not the Reel id, and that id is only known after Facebook
+    answers an HTTP redirect. Offline, those URLs are keyed as url:<host><path>
+    so the same short link matches itself. They do not match a /reel/<id> URL.
+    """
     raw = (url or "").strip()
     if not raw:
         return ""
@@ -151,15 +160,32 @@ def _category_key(value: str) -> str:
     return (value or "").strip().lower()
 
 
+def _same_playlist(current: dict[str, Any], wanted: dict[str, Any]) -> bool:
+    return (
+        current["playlist_id"] == wanted["playlist_id"]
+        and current["playlist_name"] == wanted["playlist_name"]
+        and current["playlist_position"] == wanted["playlist_position"]
+        and current["playlist_sort"] == wanted["playlist_sort"]
+    )
+
+
+def _is_assigned(current: dict[str, Any]) -> bool:
+    return bool(current["playlist_id"] or current["playlist_name"])
+
+
 def plan_reel_playlist_backfill(
     catalog: list[dict[str, Any]],
     subjects: list[dict[str, Any]],
+    *,
+    force: bool = False,
 ) -> dict[str, Any]:
     """Match catalog reels to topics. Does not write.
 
     A reel updates every non-deleted topic in the same category whose
-    facebook_video_url normalizes to that reel. Other categories are left
-    alone and reported. manage_url is ignored.
+    facebook_video_url normalizes to that reel. The first playlist in the
+    catalog that lists that reel wins. Later playlists are reported under
+    duplicates and do not change the choice. Without force, a topic that
+    already has a playlist is left alone. manage_url is ignored.
     """
     by_key: dict[tuple[str, str], list[dict[str, Any]]] = {}
     for subject in subjects:
@@ -171,11 +197,10 @@ def plan_reel_playlist_backfill(
         category = _category_key(str(subject.get("category") or ""))
         by_key.setdefault((category, key), []).append(subject)
 
-    updates: list[dict[str, Any]] = []
-    unchanged: list[str] = []
     unmatched: list[dict[str, Any]] = []
     duplicates: list[dict[str, Any]] = []
-    seen_subject: set[str] = set()
+    chosen: dict[str, dict[str, Any]] = {}
+    chosen_subject: dict[str, dict[str, Any]] = {}
 
     sort_by_category: dict[str, int] = {}
     for entry in catalog:
@@ -224,32 +249,62 @@ def plan_reel_playlist_backfill(
                         "title": title,
                         "url": url,
                         "subject_ids": [str(row.get("subject_id") or "") for row in matches],
+                        "reason": "multiple_topics",
                     }
                 )
             for subject in matches:
                 subject_id = str(subject.get("subject_id") or "")
-                row = {"subject_id": subject_id, **wanted}
-                current = public_playlist_fields(subject)
-                same = (
-                    current["playlist_id"] == wanted["playlist_id"]
-                    and current["playlist_name"] == wanted["playlist_name"]
-                    and current["playlist_position"] == wanted["playlist_position"]
-                    and current["playlist_sort"] == wanted["playlist_sort"]
-                )
-                if same:
-                    if subject_id not in seen_subject:
-                        unchanged.append(subject_id)
-                else:
-                    updates.append(row)
-                    if subject_id in unchanged:
-                        unchanged.remove(subject_id)
-                seen_subject.add(subject_id)
+                kept = chosen.get(subject_id)
+                if kept is not None:
+                    if not _same_playlist(kept, wanted):
+                        duplicates.append(
+                            {
+                                "playlist_name": playlist_name,
+                                "category": category,
+                                "title": title,
+                                "url": url,
+                                "subject_ids": [subject_id],
+                                "kept_playlist": kept["playlist_name"],
+                                "reason": "playlist_conflict",
+                            }
+                        )
+                    continue
+                chosen[subject_id] = wanted
+                chosen_subject[subject_id] = subject
+
+    updates: list[dict[str, Any]] = []
+    unchanged: list[str] = []
+    skipped: list[dict[str, Any]] = []
+    for subject_id, wanted in chosen.items():
+        current = public_playlist_fields(chosen_subject[subject_id])
+        if _same_playlist(current, wanted):
+            unchanged.append(subject_id)
+            continue
+        if not force and _is_assigned(current):
+            skipped.append(
+                {
+                    "subject_id": subject_id,
+                    "before": current,
+                    "after": dict(wanted),
+                }
+            )
+            continue
+        updates.append(
+            {
+                "subject_id": subject_id,
+                "before": current,
+                "after": dict(wanted),
+                **wanted,
+            }
+        )
 
     return {
         "updates": updates,
         "unchanged": unchanged,
+        "skipped": skipped,
         "unmatched": unmatched,
         "duplicates": duplicates,
+        "force": force,
     }
 
 
@@ -257,29 +312,45 @@ def apply_reel_playlist_backfill(
     catalog: list[dict[str, Any]],
     *,
     dry_run: bool = False,
+    force: bool = False,
 ) -> dict[str, Any]:
-    """Assign playlist fields on existing topics. Safe to run more than once."""
+    """Assign playlist fields on existing topics. Safe to run more than once.
+
+    Without force, topics that already have a playlist are skipped.
+    """
+    from botocore.exceptions import ClientError
+
     from app import db, keys
     from app.services.subject_service import list_subjects
 
-    plan = plan_reel_playlist_backfill(catalog, list_subjects())
+    plan = plan_reel_playlist_backfill(catalog, list_subjects(), force=force)
     plan["dry_run"] = dry_run
     plan["updated"] = 0
+    plan["failures"] = []
     if dry_run or not plan["updates"]:
         return plan
 
     now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
     for row in plan["updates"]:
-        db.update_item(
-            keys.subject_pk(row["subject_id"]),
-            keys.subject_meta_sk(),
-            {
-                "playlist_id": row["playlist_id"],
-                "playlist_name": row["playlist_name"],
-                "playlist_position": int(row["playlist_position"]),
-                "playlist_sort": int(row["playlist_sort"]),
-                "updated_at": now,
-            },
-        )
+        try:
+            db.update_item(
+                keys.subject_pk(row["subject_id"]),
+                keys.subject_meta_sk(),
+                {
+                    "playlist_id": row["playlist_id"],
+                    "playlist_name": row["playlist_name"],
+                    "playlist_position": int(row["playlist_position"]),
+                    "playlist_sort": int(row["playlist_sort"]),
+                    "updated_at": now,
+                },
+                condition="attribute_exists(PK)",
+            )
+        except ClientError as exc:
+            code = exc.response.get("Error", {}).get("Code") or "ClientError"
+            plan["failures"].append({"subject_id": row["subject_id"], "error": code})
+            continue
+        except Exception as exc:
+            plan["failures"].append({"subject_id": row["subject_id"], "error": str(exc)})
+            continue
         plan["updated"] += 1
     return plan

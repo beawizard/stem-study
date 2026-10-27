@@ -123,7 +123,16 @@ def test_normalize_and_merge_edge_cases():
     userinfo = normalize_reel_url("https://user:pass@www.facebook.com/reel/29256819773901645")
     assert port == userinfo == "fb:29256819773901645"
     short = normalize_reel_url("https://fb.watch/abcDEF")
-    assert short == "url:fb.watch/abcdef"
+    short_slash = normalize_reel_url("https://fb.watch/abcDEF/")
+    share = normalize_reel_url("https://www.facebook.com/share/r/AbC123/")
+    # Short links are not Reel ids. Matching them to a /reel/<id> URL needs
+    # Facebook's redirect, which this matcher does not follow.
+    assert short == short_slash == "url:fb.watch/abcdef"
+    assert share == "url:facebook.com/share/r/abc123"
+    assert not short.startswith("fb:")
+    assert not share.startswith("fb:")
+    with pytest.raises(ValueError, match="control"):
+        clean_playlist_name("Plan\nts")
     assert playlist_update_from_payload({"playlist_name": "Keep"}, {}) is None
     created = playlist_update_from_payload(None, {"playlist_name": "Plants"})
     assert created["playlist_id"] == ""
@@ -139,7 +148,7 @@ def test_normalize_and_merge_edge_cases():
 
 
 @pytest.mark.unit
-def test_plan_skips_deleted_and_blank_urls_and_reassigns_same_topic():
+def test_plan_skips_deleted_and_blank_urls_and_keeps_first_listing():
     subjects = [
         {"subject_id": "gone", "deleted_at": "2020-01-01T00:00:00Z", "category": "Science", "facebook_video_url": SPIDERS},
         {"subject_id": "blank", "category": "Science", "facebook_video_url": "  "},
@@ -166,9 +175,11 @@ def test_plan_skips_deleted_and_blank_urls_and_reassigns_same_topic():
         }
     ]
     plan = plan_reel_playlist_backfill(catalog, subjects)
-    assert [row["subject_id"] for row in plan["updates"]] == ["science-spiders"]
-    assert plan["updates"][0]["playlist_position"] == 2
-    assert plan["unchanged"] == []
+    assert plan["updates"] == []
+    assert plan["unchanged"] == ["science-spiders"]
+    conflicts = [row for row in plan["duplicates"] if row["reason"] == "playlist_conflict"]
+    assert conflicts
+    assert conflicts[0]["kept_playlist"] == "Ecosystems"
     assert any(row["title"] == "Empty" and row["reason"] == "no_topic" for row in plan["unmatched"])
 
 
@@ -324,3 +335,322 @@ def test_subject_api_sets_playlist(dynamodb_table, admin_headers, user_headers):
         )
     )
     assert invalid["statusCode"] == 422
+
+    long_name = handler(
+        make_event(
+            "PUT",
+            f"/subjects/{body['subject_id']}",
+            headers=admin_headers,
+            body=json.dumps({"playlist_name": "p" * 81}),
+        )
+    )
+    assert long_name["statusCode"] == 422
+
+    newline = handler(
+        make_event(
+            "PUT",
+            f"/subjects/{body['subject_id']}",
+            headers=admin_headers,
+            body=json.dumps({"playlist_name": "Eco\nsystems"}),
+        )
+    )
+    assert newline["statusCode"] == 422
+
+
+@pytest.mark.unit
+def test_put_without_playlist_keys_and_null_keep_membership(dynamodb_table, admin_headers):
+    created = handler(
+        make_event(
+            "POST",
+            "/subjects",
+            headers=admin_headers,
+            body=json.dumps(
+                {
+                    "category": "Science",
+                    "topic": "Spiders",
+                    "subject_id": "science-spiders",
+                    "playlist_name": "Ecosystems",
+                    "playlist_id": "1838370447615931",
+                    "playlist_position": 3,
+                    "playlist_sort": 1,
+                }
+            ),
+        )
+    )
+    assert created["statusCode"] == 201, created["body"]
+    subject_id = json.loads(created["body"])["subject_id"]
+
+    renamed = handler(
+        make_event(
+            "PUT",
+            f"/subjects/{subject_id}",
+            headers=admin_headers,
+            body=json.dumps({"topic": "Orb weavers"}),
+        )
+    )
+    assert renamed["statusCode"] == 200, renamed["body"]
+    kept = json.loads(renamed["body"])
+    assert kept["topic"] == "Orb weavers"
+    assert kept["playlist_name"] == "Ecosystems"
+    assert kept["playlist_id"] == "1838370447615931"
+    assert kept["playlist_position"] == 3
+    assert kept["playlist_sort"] == 1
+
+    nulled = handler(
+        make_event(
+            "PUT",
+            f"/subjects/{subject_id}",
+            headers=admin_headers,
+            body=json.dumps(
+                {
+                    "playlist_name": None,
+                    "playlist_id": None,
+                    "playlist_position": None,
+                    "playlist_sort": None,
+                }
+            ),
+        )
+    )
+    assert nulled["statusCode"] == 200, nulled["body"]
+    still = json.loads(nulled["body"])
+    assert still["playlist_name"] == "Ecosystems"
+    assert still["playlist_id"] == "1838370447615931"
+    assert still["playlist_position"] == 3
+    assert still["playlist_sort"] == 1
+
+
+@pytest.mark.unit
+def test_non_admin_cannot_write_subjects_or_science_topics(
+    dynamodb_table, admin_headers, user_headers
+):
+    created = handler(
+        make_event(
+            "POST",
+            "/subjects",
+            headers=admin_headers,
+            body=json.dumps({"category": "Science", "topic": "Rocks"}),
+        )
+    )
+    assert created["statusCode"] == 201, created["body"]
+    subject_id = json.loads(created["body"])["subject_id"]
+
+    denied_put = handler(
+        make_event(
+            "PUT",
+            f"/subjects/{subject_id}",
+            headers=user_headers,
+            body=json.dumps({"topic": "Nope"}),
+        )
+    )
+    assert denied_put["statusCode"] == 403
+
+    denied_subject = handler(
+        make_event(
+            "POST",
+            "/subjects",
+            headers=user_headers,
+            body=json.dumps({"category": "Science", "topic": "Nope"}),
+        )
+    )
+    assert denied_subject["statusCode"] == 403
+
+    denied_science = handler(
+        make_event(
+            "POST",
+            "/science/topics",
+            headers=user_headers,
+            body=json.dumps({"category": "Science", "topic": "Nope"}),
+        )
+    )
+    assert denied_science["statusCode"] == 403
+
+
+@pytest.mark.unit
+def test_duplicate_reel_stays_on_the_first_playlist(dynamodb_table):
+    create_subject(
+        SubjectCreate(
+            category="Science",
+            topic="Spiders",
+            subject_id="science-spiders",
+        )
+    )
+    _put_facebook("science-spiders", SPIDERS)
+    catalog = [
+        {
+            "name": "Ecosystems",
+            "category": "Science",
+            "playlist_id": "1838370447615931",
+            "reels": [{"title": "Spiders", "url": SPIDERS}],
+        },
+        {
+            "name": "Everyday Science",
+            "category": "Science",
+            "playlist_id": "935983412709483",
+            "reels": [{"title": "Spiders again", "url": SPIDERS}],
+        },
+    ]
+    first = apply_reel_playlist_backfill(catalog)
+    assert first["updated"] == 1
+    assert first["updates"][0]["playlist_name"] == "Ecosystems"
+    assert first["updates"][0]["before"]["playlist_name"] == ""
+    assert first["updates"][0]["after"]["playlist_name"] == "Ecosystems"
+    assert any(row["reason"] == "playlist_conflict" for row in first["duplicates"])
+
+    second = apply_reel_playlist_backfill(catalog)
+    assert second["updated"] == 0
+    assert second["updates"] == []
+    assert second["unchanged"] == ["science-spiders"]
+    stored = db.get_item(keys.subject_pk("science-spiders"), keys.subject_meta_sk())
+    assert stored["playlist_name"] == "Ecosystems"
+    assert stored["playlist_id"] == "1838370447615931"
+
+
+@pytest.mark.unit
+def test_backfill_keeps_manual_playlist_unless_forced(dynamodb_table):
+    create_subject(
+        SubjectCreate(
+            category="Science",
+            topic="Spiders",
+            subject_id="science-spiders",
+        )
+    )
+    _put_facebook("science-spiders", SPIDERS)
+    db.update_item(
+        keys.subject_pk("science-spiders"),
+        keys.subject_meta_sk(),
+        {
+            "playlist_id": "99999",
+            "playlist_name": "Class notes",
+            "playlist_position": 4,
+            "playlist_sort": 2,
+        },
+    )
+    kept = apply_reel_playlist_backfill(_catalog_one())
+    assert kept["updated"] == 0
+    assert kept["updates"] == []
+    assert kept["skipped"][0]["subject_id"] == "science-spiders"
+    assert kept["skipped"][0]["before"]["playlist_name"] == "Class notes"
+    assert kept["skipped"][0]["after"]["playlist_name"] == "Ecosystems"
+    stored = db.get_item(keys.subject_pk("science-spiders"), keys.subject_meta_sk())
+    assert stored["playlist_name"] == "Class notes"
+
+    forced = apply_reel_playlist_backfill(_catalog_one(), force=True)
+    assert forced["updated"] == 1
+    assert forced["updates"][0]["before"]["playlist_name"] == "Class notes"
+    assert forced["updates"][0]["after"]["playlist_name"] == "Ecosystems"
+    stored = db.get_item(keys.subject_pk("science-spiders"), keys.subject_meta_sk())
+    assert stored["playlist_name"] == "Ecosystems"
+    assert stored["playlist_position"] == 1
+
+
+@pytest.mark.unit
+def test_apply_does_not_recreate_a_deleted_topic(dynamodb_table, monkeypatch):
+    monkeypatch.setattr(
+        "app.services.subject_service.list_subjects",
+        lambda: [
+            {
+                "subject_id": "ghost-topic",
+                "category": "Science",
+                "facebook_video_url": SPIDERS,
+            }
+        ],
+    )
+    result = apply_reel_playlist_backfill(_catalog_one())
+    assert result["updated"] == 0
+    assert result["failures"]
+    assert result["failures"][0]["subject_id"] == "ghost-topic"
+    assert db.get_item(keys.subject_pk("ghost-topic"), keys.subject_meta_sk()) is None
+
+
+@pytest.mark.unit
+def test_mathematics_ignores_playlists(dynamodb_table, admin_headers, user_headers):
+    rejected = handler(
+        make_event(
+            "POST",
+            "/subjects",
+            headers=admin_headers,
+            body=json.dumps(
+                {
+                    "category": "Mathematics",
+                    "topic": "Addition",
+                    "playlist_name": "Ecosystems",
+                    "playlist_id": "1838370447615931",
+                }
+            ),
+        )
+    )
+    assert rejected["statusCode"] == 422
+
+    created = handler(
+        make_event(
+            "POST",
+            "/subjects",
+            headers=admin_headers,
+            body=json.dumps(
+                {
+                    "category": "Mathematics",
+                    "topic": "Addition",
+                    "subject_id": "math-addition",
+                }
+            ),
+        )
+    )
+    assert created["statusCode"] == 201, created["body"]
+    _put_facebook("math-addition", SPIDERS, category="Mathematics")
+
+    edited = handler(
+        make_event(
+            "PUT",
+            "/subjects/math-addition",
+            headers=admin_headers,
+            body=json.dumps({"description": "Sums"}),
+        )
+    )
+    assert edited["statusCode"] == 200, edited["body"]
+    body = json.loads(edited["body"])
+    assert body["description"] == "Sums"
+    assert body["playlist_name"] == ""
+    assert body["playlist_id"] == ""
+
+    playlist_put = handler(
+        make_event(
+            "PUT",
+            "/subjects/math-addition",
+            headers=admin_headers,
+            body=json.dumps(
+                {
+                    "playlist_name": "Ecosystems",
+                    "playlist_id": "1838370447615931",
+                    "playlist_position": 1,
+                    "playlist_sort": 1,
+                }
+            ),
+        )
+    )
+    assert playlist_put["statusCode"] in (400, 422)
+
+    science_math = handler(
+        make_event(
+            "POST",
+            "/science/topics",
+            headers=admin_headers,
+            body=json.dumps(
+                {
+                    "category": "Mathematics",
+                    "topic": "Fractions",
+                    "playlist_name": "Ecosystems",
+                }
+            ),
+        )
+    )
+    assert science_math["statusCode"] == 422
+
+    result = apply_reel_playlist_backfill(_catalog_one())
+    assert result["updates"] == []
+    stored = db.get_item(keys.subject_pk("math-addition"), keys.subject_meta_sk())
+    assert stored["playlist_name"] == ""
+    assert stored["playlist_id"] == ""
+    listed = handler(make_event("GET", "/subjects", headers=user_headers))
+    rows = json.loads(listed["body"])["subjects"]
+    match = next(row for row in rows if row["subject_id"] == "math-addition")
+    assert match["playlist_name"] == ""

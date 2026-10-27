@@ -1305,7 +1305,9 @@ const App = (() => {
         const topic = String(item.topic || item.name || subjectId || "Lesson");
         const slug = category.toLowerCase().replace(/[^a-z]/g, "") || "lesson";
         const imageUrl = String(item.image_url || "").trim();
-        const htmlUrl = String(item.interactive_html_url || "").trim();
+        const htmlUrl = options.htmlPreview
+          ? String(item.interactive_html_url || "").trim()
+          : "";
         const visual = imageUrl
           ? `<img class="recommend-thumb" src="${escapeAttr(
               imageUrl
@@ -1346,6 +1348,7 @@ const App = (() => {
     return lessonCarouselHtml(items, {
       title: "Recommended lessons",
       ariaLabel: "Recommended lessons",
+      htmlPreview: true,
     });
   }
 
@@ -1424,18 +1427,57 @@ const App = (() => {
   }
 
   function readPlaylistFields(prefix) {
+    const clear = Boolean(document.getElementById(`${prefix}-clear-playlist`)?.checked);
+    if (clear) {
+      return {
+        playlist_name: "",
+        playlist_id: "",
+        playlist_position: 0,
+        playlist_sort: 0,
+      };
+    }
     const name = (document.getElementById(`${prefix}-playlist-name`)?.value || "").trim();
     const id = (document.getElementById(`${prefix}-playlist-id`)?.value || "").trim();
     const positionRaw = (document.getElementById(`${prefix}-playlist-position`)?.value || "").trim();
     const sortRaw = (document.getElementById(`${prefix}-playlist-sort`)?.value || "").trim();
-    const position = positionRaw === "" ? 0 : parseInt(positionRaw, 10);
-    const sort = sortRaw === "" ? 0 : parseInt(sortRaw, 10);
+    const position = positionRaw === "" ? null : parseInt(positionRaw, 10);
+    const sort = sortRaw === "" ? null : parseInt(sortRaw, 10);
     return {
-      playlist_name: name,
-      playlist_id: id,
-      playlist_position: Number.isFinite(position) ? position : 0,
-      playlist_sort: Number.isFinite(sort) ? sort : 0,
+      playlist_name: name || null,
+      playlist_id: id || null,
+      playlist_position: Number.isFinite(position) ? position : null,
+      playlist_sort: Number.isFinite(sort) ? sort : null,
     };
+  }
+
+  function sciencePlaylistFieldsHtml() {
+    if ((state.adminUploadCategory || "Science") === "Mathematics") return "";
+    return `
+          <div class="row">
+            <div class="grow">
+              <label for="sci-playlist-name">Playlist name</label>
+              <input id="sci-playlist-name" maxlength="80" placeholder="e.g. Ecosystems" />
+            </div>
+            <div>
+              <label for="sci-playlist-position">Position</label>
+              <input id="sci-playlist-position" type="number" min="0" max="10000" inputmode="numeric" placeholder="1" />
+            </div>
+          </div>
+          <div class="row">
+            <div class="grow">
+              <label for="sci-playlist-id">Facebook playlist id</label>
+              <input id="sci-playlist-id" maxlength="32" inputmode="numeric" placeholder="Numeric id, optional" />
+            </div>
+            <div>
+              <label for="sci-playlist-sort">Playlist order</label>
+              <input id="sci-playlist-sort" type="number" min="0" max="1000" inputmode="numeric" placeholder="1" />
+            </div>
+          </div>
+          <label class="check-row">
+            <input type="checkbox" id="sci-clear-playlist" />
+            Clear playlist
+          </label>
+          <p class="muted" style="margin:0">Leave these blank to keep the playlist already saved. Clear playlist removes it.</p>`;
   }
 
   function studyTopicPickerHtml(topics, topicOptions) {
@@ -1549,7 +1591,7 @@ const App = (() => {
     });
   }
 
-  function bindRecommendCarousel() {
+  function bindLessonCarousels() {
     main().querySelectorAll("[data-lesson-carousel]").forEach((card) => {
       bindOneLessonCarousel(card);
     });
@@ -4010,27 +4052,7 @@ const App = (() => {
               <input id="sci-facebook-video" type="url" maxlength="1000" placeholder="Facebook link" aria-label="Facebook link" />
             </div>
           </div>
-          <div class="row">
-            <div class="grow">
-              <label for="sci-playlist-name">Playlist name</label>
-              <input id="sci-playlist-name" maxlength="80" placeholder="e.g. Ecosystems" />
-            </div>
-            <div>
-              <label for="sci-playlist-position">Position</label>
-              <input id="sci-playlist-position" type="number" min="0" max="10000" inputmode="numeric" placeholder="1" />
-            </div>
-          </div>
-          <div class="row">
-            <div class="grow">
-              <label for="sci-playlist-id">Facebook playlist id</label>
-              <input id="sci-playlist-id" maxlength="32" inputmode="numeric" placeholder="Numeric id, optional" />
-            </div>
-            <div>
-              <label for="sci-playlist-sort">Playlist order</label>
-              <input id="sci-playlist-sort" type="number" min="0" max="1000" inputmode="numeric" placeholder="1" />
-            </div>
-          </div>
-          <p class="muted" style="margin:0">Leave the playlist blank and the topic stays under Other. Mathematics does not use playlists.</p>
+          ${sciencePlaylistFieldsHtml()}
           <label class="check-row">
             <input type="checkbox" id="sci-replace" />
             Replace this topic if it already exists
@@ -4161,29 +4183,36 @@ const App = (() => {
                 value="${escapeAttr(formDesc)}" />
             </div>
           </div>
-          <div class="row">
-            <div class="grow">
-              <label for="subj-playlist-name">Playlist name</label>
-              <input id="subj-playlist-name" maxlength="80" placeholder="e.g. Forces &amp; Motion"
-                value="${escapeAttr(formPlaylistName)}" />
+          <div id="subj-playlist-fields" class="${activeCategory === "Mathematics" ? "hidden" : ""}">
+            <div class="row">
+              <div class="grow">
+                <label for="subj-playlist-name">Playlist name</label>
+                <input id="subj-playlist-name" maxlength="80" placeholder="e.g. Forces &amp; Motion"
+                  value="${escapeAttr(formPlaylistName)}" />
+              </div>
+              <div>
+                <label for="subj-playlist-position">Position</label>
+                <input id="subj-playlist-position" type="number" min="0" max="10000" inputmode="numeric"
+                  placeholder="1" value="${escapeAttr(formPlaylistPosition)}" />
+              </div>
             </div>
-            <div>
-              <label for="subj-playlist-position">Position</label>
-              <input id="subj-playlist-position" type="number" min="0" max="10000" inputmode="numeric"
-                placeholder="1" value="${escapeAttr(formPlaylistPosition)}" />
+            <div class="row">
+              <div class="grow">
+                <label for="subj-playlist-id">Facebook playlist id</label>
+                <input id="subj-playlist-id" maxlength="32" inputmode="numeric" placeholder="Numeric id, optional"
+                  value="${escapeAttr(formPlaylistId)}" />
+              </div>
+              <div>
+                <label for="subj-playlist-sort">Playlist order</label>
+                <input id="subj-playlist-sort" type="number" min="0" max="1000" inputmode="numeric"
+                  placeholder="1" value="${escapeAttr(formPlaylistSort)}" />
+              </div>
             </div>
-          </div>
-          <div class="row">
-            <div class="grow">
-              <label for="subj-playlist-id">Facebook playlist id</label>
-              <input id="subj-playlist-id" maxlength="32" inputmode="numeric" placeholder="Numeric id, optional"
-                value="${escapeAttr(formPlaylistId)}" />
-            </div>
-            <div>
-              <label for="subj-playlist-sort">Playlist order</label>
-              <input id="subj-playlist-sort" type="number" min="0" max="1000" inputmode="numeric"
-                placeholder="1" value="${escapeAttr(formPlaylistSort)}" />
-            </div>
+            <label class="check-row">
+              <input type="checkbox" id="subj-clear-playlist" />
+              Clear playlist
+            </label>
+            <p class="muted" style="margin:0">Leave these blank to keep the playlist already saved. Clear playlist removes it. Mathematics does not use playlists.</p>
           </div>
           <div class="row" style="align-items:flex-end">
             <div>
@@ -7324,6 +7353,14 @@ const App = (() => {
       };
     }
 
+    const subjectCategory = document.getElementById("subj-category");
+    if (subjectCategory) {
+      subjectCategory.onchange = () => {
+        const box = document.getElementById("subj-playlist-fields");
+        if (box) box.classList.toggle("hidden", subjectCategory.value === "Mathematics");
+      };
+    }
+
     const subjectForm = document.getElementById("admin-subject-form");
     if (subjectForm) {
       subjectForm.onsubmit = async (e) => {
@@ -7338,13 +7375,14 @@ const App = (() => {
           const gradeLevel = (
             document.getElementById("subj-grade-level")?.value || ""
           ).trim();
+          const playlist = category === "Mathematics" ? {} : readPlaylistFields("subj");
           const created = await Api.createSubject(token(), {
             category,
             topic,
             description: document.getElementById("subj-desc").value.trim(),
             sort_order: parseInt(document.getElementById("subj-order").value, 10) || 0,
             grade_level: gradeLevel || null,
-            ...readPlaylistFields("subj"),
+            ...playlist,
           });
           toast(`Subject "${subjectDisplayLabel(created)}" created`);
           state.adminSubjectId = created.subject_id;
@@ -7376,13 +7414,14 @@ const App = (() => {
           const gradeLevel = (
             document.getElementById("subj-grade-level")?.value || ""
           ).trim();
+          const playlist = category === "Mathematics" ? {} : readPlaylistFields("subj");
           const payload = {
             category,
             topic,
             description: document.getElementById("subj-desc")?.value.trim() || "",
             sort_order: parseInt(document.getElementById("subj-order")?.value, 10) || 0,
             grade_level: gradeLevel,
-            ...readPlaylistFields("subj"),
+            ...playlist,
           };
           // Prefer Api.updateSubject; fall back if a stale-cached api.js is loaded
           const updated =
@@ -7700,7 +7739,9 @@ const App = (() => {
         const playlistIdEl = document.getElementById("sci-playlist-id");
         const playlistPositionEl = document.getElementById("sci-playlist-position");
         const playlistSortEl = document.getElementById("sci-playlist-sort");
+        const clearPlaylistEl = document.getElementById("sci-clear-playlist");
         const htmlHint = document.getElementById("sci-html-hint");
+        if (clearPlaylistEl) clearPlaylistEl.checked = false;
         const clearPlaylist = () => {
           if (playlistNameEl) playlistNameEl.value = "";
           if (playlistIdEl) playlistIdEl.value = "";
@@ -7794,7 +7835,7 @@ const App = (() => {
           toast("Facebook link must be an http(s) URL.", true);
           return;
         }
-        const playlist = readPlaylistFields("sci");
+        const playlist = category === "Mathematics" ? {} : readPlaylistFields("sci");
         if (playlist.playlist_id && !/^\d{5,32}$/.test(playlist.playlist_id)) {
           toast("Facebook playlist id must be the numeric id.", true);
           return;
@@ -8514,7 +8555,7 @@ const App = (() => {
     if (lbCsv) {
       lbCsv.onclick = () => downloadLeaderboardCsv(state.leaderboardEntries);
     }
-    bindRecommendCarousel();
+    bindLessonCarousels();
     if (
       state.route === "study" &&
       !state.studyPhase &&
