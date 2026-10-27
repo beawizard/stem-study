@@ -48,6 +48,13 @@ _TIME_MIN = re.compile(r"time\s+allowed:\s*(\d+)\s*minutes\b", re.IGNORECASE)
 _TIME_HOUR = re.compile(r"time\s+allowed:\s*(\d+)\s*hours?\b", re.IGNORECASE)
 _QCOUNT = re.compile(r"(\d+)\s+multiple-choice\s+questions", re.IGNORECASE)
 _KEY_PAIR = re.compile(r"(\d{1,3})([A-E])", re.IGNORECASE)
+# STEC / form-style stems often end with a leftover required-field asterisk.
+_TRAILING_ASTERISK = re.compile(r"\s*\*+\s*$")
+
+
+def strip_trailing_asterisks(text: str) -> str:
+    """Remove a trailing * (and surrounding space) from a question stem."""
+    return _TRAILING_ASTERISK.sub("", (text or "").rstrip()).rstrip()
 
 
 def official_points_penalty(item_no: int) -> tuple[int, int]:
@@ -201,6 +208,7 @@ def _parse_contest_mcq(
             current = None
             return
         if scoring == "ismc":
+            current["prompt"] = strip_trailing_asterisks(current.get("prompt") or "")
             pts, pen = ISMC_POINT, 0
         else:
             pts, pen = official_points_penalty(int(current["item_no"]))

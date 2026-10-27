@@ -12,6 +12,7 @@ from app.vedic import (
     ismc_time_limit_sec,
     parse_ismc_mcq,
     score_ismc_item,
+    strip_trailing_asterisks,
 )
 
 _ISMC = (
@@ -19,6 +20,12 @@ _ISMC = (
     / "resources"
     / "ismc"
     / "ISMC_Level2_Set1.docx"
+)
+_ISMC_STEC = (
+    Path(__file__).resolve().parents[2]
+    / "resources"
+    / "ismc"
+    / "ISMC_STEC_Level2_Set1.docx"
 )
 _PAPER_B = (
     Path(__file__).resolve().parents[2]
@@ -49,6 +56,48 @@ Answer Key
 1B  2C
 """
 
+_MINI_STAR = """LEVEL 1
+10–12 years
+SET 2
+Time allowed: 12 minutes.  2 multiple-choice questions.  No calculator.
+1.  What is the LCM of 12 and 18? *
+A  18
+B  24
+C  36
+D  48
+E  72
+[ans=C]
+2.  Next square number: 25, 36, 49, ___
+A  54
+B  64
+C  81
+D  100
+E  121
+[ans=B]
+Answer Key
+1C  2B
+"""
+
+
+@pytest.mark.unit
+def test_strip_trailing_asterisks_from_stems():
+    assert strip_trailing_asterisks("What is 15% of 60? *") == "What is 15% of 60?"
+    assert strip_trailing_asterisks("Next square number: 25, 36, 49, ___") == (
+        "Next square number: 25, 36, 49, ___"
+    )
+    assert strip_trailing_asterisks("Simplify: 48 ÷ 6 × 3 + 5 – 8 **  ") == (
+        "Simplify: 48 ÷ 6 × 3 + 5 – 8"
+    )
+
+
+@pytest.mark.unit
+def test_parse_ismc_strips_trailing_asterisk_from_prompt():
+    items = parse_ismc_mcq(_MINI_STAR.splitlines())
+    assert len(items) == 2
+    assert items[0]["prompt"] == "What is the LCM of 12 and 18?"
+    assert not items[0]["prompt"].endswith("*")
+    assert items[1]["prompt"] == "Next square number: 25, 36, 49, ___"
+
 
 @pytest.mark.unit
 def test_score_ismc_is_one_point_without_vedic_penalty():
@@ -78,6 +127,16 @@ def test_parse_ismc_level2_set1_docx():
     assert items[-1]["answer"] == "A"
     assert all(it["points"] == 1 and it["penalty"] == 0 for it in items)
     assert sum(it["points"] for it in items) == 30
+
+
+@pytest.mark.unit
+def test_parse_ismc_stec_docx_strips_trailing_asterisks():
+    assert _ISMC_STEC.exists(), _ISMC_STEC
+    paragraphs = extract_docx_paragraphs(_ISMC_STEC.read_bytes())
+    items = parse_ismc_mcq(paragraphs)
+    assert len(items) == 30
+    assert items[0]["prompt"] == "What is the LCM of 12 and 18?"
+    assert all(not str(it["prompt"]).rstrip().endswith("*") for it in items)
 
 
 @pytest.mark.unit
