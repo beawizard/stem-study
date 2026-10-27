@@ -132,7 +132,7 @@ def main() -> int:
         f"reels={sum(len(item.get('reels') or []) for item in catalog)}"
     )
     print_report(result)
-    return 0
+    return 1 if result.get("failures") else 0
 
 
 if __name__ == "__main__":

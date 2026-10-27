@@ -22,6 +22,7 @@ from app.vedic import (
 )
 from app.playlists import (
     PLAYLIST_FIELD_NAMES,
+    blank_playlist_fields,
     playlist_fields_for_model,
     playlist_update_from_payload,
     public_playlist_fields,
@@ -168,9 +169,11 @@ def update_subject(subject_id: str, data) -> dict[str, Any]:
         ]
         if touched:
             raise ValueError("Mathematics topics do not use playlists")
-    playlist_updates = playlist_update_from_payload(existing, payload)
-    if playlist_updates:
-        updates.update(playlist_updates)
+        updates.update(blank_playlist_fields())
+    else:
+        playlist_updates = playlist_update_from_payload(existing, payload)
+        if playlist_updates:
+            updates.update(playlist_updates)
 
     db.update_item(
         keys.subject_pk(subject_id),

@@ -654,3 +654,58 @@ def test_mathematics_ignores_playlists(dynamodb_table, admin_headers, user_heade
     rows = json.loads(listed["body"])["subjects"]
     match = next(row for row in rows if row["subject_id"] == "math-addition")
     assert match["playlist_name"] == ""
+
+
+@pytest.mark.unit
+def test_moving_to_mathematics_clears_playlist(dynamodb_table, admin_headers):
+    created = handler(
+        make_event(
+            "POST",
+            "/subjects",
+            headers=admin_headers,
+            body=json.dumps(
+                {
+                    "category": "Science",
+                    "topic": "Spiders",
+                    "subject_id": "science-spiders",
+                    "playlist_name": "Ecosystems",
+                    "playlist_id": "1838370447615931",
+                    "playlist_position": 2,
+                    "playlist_sort": 1,
+                }
+            ),
+        )
+    )
+    assert created["statusCode"] == 201, created["body"]
+
+    moved = handler(
+        make_event(
+            "PUT",
+            "/subjects/science-spiders",
+            headers=admin_headers,
+            body=json.dumps({"category": "Mathematics"}),
+        )
+    )
+    assert moved["statusCode"] == 200, moved["body"]
+    as_math = json.loads(moved["body"])
+    assert as_math["category"] == "Mathematics"
+    assert as_math["playlist_name"] == ""
+    assert as_math["playlist_id"] == ""
+    assert as_math["playlist_position"] == 0
+    assert as_math["playlist_sort"] == 0
+
+    restored = handler(
+        make_event(
+            "PUT",
+            "/subjects/science-spiders",
+            headers=admin_headers,
+            body=json.dumps({"category": "Science"}),
+        )
+    )
+    assert restored["statusCode"] == 200, restored["body"]
+    as_science = json.loads(restored["body"])
+    assert as_science["category"] == "Science"
+    assert as_science["playlist_name"] == ""
+    assert as_science["playlist_id"] == ""
+    assert as_science["playlist_position"] == 0
+    assert as_science["playlist_sort"] == 0
