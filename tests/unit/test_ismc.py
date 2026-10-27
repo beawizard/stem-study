@@ -133,10 +133,28 @@ def test_parse_ismc_level2_set1_docx():
 def test_parse_ismc_stec_docx_strips_trailing_asterisks():
     assert _ISMC_STEC.exists(), _ISMC_STEC
     paragraphs = extract_docx_paragraphs(_ISMC_STEC.read_bytes())
+    assert detect_exam_kind(paragraphs) == "ismc"
     items = parse_ismc_mcq(paragraphs)
     assert len(items) == 30
     assert items[0]["prompt"] == "What is the LCM of 12 and 18?"
     assert all(not str(it["prompt"]).rstrip().endswith("*") for it in items)
+
+
+@pytest.mark.unit
+def test_stec_title_without_time_line_is_ismc():
+    paragraphs = [
+        "ISMC - STEC – Level 2 - Set 1 (30 Questions)",
+        "1. What is the LCM of 12 and 18? *",
+        "A  36",
+        "B  24",
+        "C  48",
+        "D  72",
+        "E  90",
+        "[ans=A]",
+    ]
+    assert detect_exam_kind(paragraphs) == "ismc"
+    items = parse_ismc_mcq(paragraphs)
+    assert items[0]["prompt"] == "What is the LCM of 12 and 18?"
 
 
 @pytest.mark.unit

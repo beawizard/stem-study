@@ -43,7 +43,8 @@ _VEDIC_SCHEME = re.compile(
     r"(\d+\s*marks|\bpenalty\b|\[\d+\s*pts?\]|maximum\s+\d+|paper\s+[a-z])",
     re.IGNORECASE,
 )
-_ISMC_LEVEL = re.compile(r"(^|\n)\s*level\s+\d+\b", re.IGNORECASE)
+_ISMC_LEVEL = re.compile(r"\blevel\s+\d+\b", re.IGNORECASE)
+_ISMC_NAME = re.compile(r"\bismc\b", re.IGNORECASE)
 _TIME_MIN = re.compile(r"time\s+allowed:\s*(\d+)\s*minutes\b", re.IGNORECASE)
 _TIME_HOUR = re.compile(r"time\s+allowed:\s*(\d+)\s*hours?\b", re.IGNORECASE)
 _QCOUNT = re.compile(r"(\d+)\s+multiple-choice\s+questions", re.IGNORECASE)
@@ -123,7 +124,11 @@ def detect_exam_kind(paragraphs: list[str]) -> str:
     for raw in paragraphs:
         if re.search(r"\[\d+\s*pts?\]", raw or "", re.IGNORECASE):
             return "vedic"
-    if _ISMC_LEVEL.search(head) or _TIME_MIN.search(head):
+    if (
+        _ISMC_NAME.search(head)
+        or _ISMC_LEVEL.search(head)
+        or _TIME_MIN.search(head)
+    ):
         return "ismc"
     return "vedic"
 
@@ -207,8 +212,8 @@ def _parse_contest_mcq(
                 )
             current = None
             return
+        current["prompt"] = strip_trailing_asterisks(current.get("prompt") or "")
         if scoring == "ismc":
-            current["prompt"] = strip_trailing_asterisks(current.get("prompt") or "")
             pts, pen = ISMC_POINT, 0
         else:
             pts, pen = official_points_penalty(int(current["item_no"]))
