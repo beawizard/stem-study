@@ -296,6 +296,18 @@ class TaskUpdate(BaseModel):
         return v
 
 
+def _validate_playlist_id(value: str | None) -> str | None:
+    from app.playlists import clean_playlist_id
+
+    return clean_playlist_id(value)
+
+
+def _validate_playlist_name(value: str | None) -> str | None:
+    from app.playlists import clean_playlist_name
+
+    return clean_playlist_name(value)
+
+
 class SubjectCreate(BaseModel):
     """Create a subject (topic) under a STEM category.
 
@@ -314,6 +326,10 @@ class SubjectCreate(BaseModel):
     sort_order: int = Field(default=0, ge=0, le=10000)
     # Study content grade band shown on Study landing (Kindergarten / Grade 1–12)
     grade_level: str | None = Field(default=None, max_length=32)
+    playlist_id: str | None = Field(default=None, max_length=32)
+    playlist_name: str | None = Field(default=None, max_length=80)
+    playlist_position: int | None = Field(default=None, ge=0, le=10000)
+    playlist_sort: int | None = Field(default=None, ge=0, le=1000)
 
     @field_validator("category")
     @classmethod
@@ -342,6 +358,16 @@ class SubjectCreate(BaseModel):
     def validate_grade_level(cls, v: str | None) -> str | None:
         return normalize_content_grade(v)
 
+    @field_validator("playlist_id")
+    @classmethod
+    def validate_playlist_id(cls, v: str | None) -> str | None:
+        return _validate_playlist_id(v)
+
+    @field_validator("playlist_name")
+    @classmethod
+    def validate_playlist_name(cls, v: str | None) -> str | None:
+        return _validate_playlist_name(v)
+
     @model_validator(mode="after")
     def require_topic_or_name(self) -> "SubjectCreate":
         if not ((self.topic and self.topic.strip()) or (self.name and self.name.strip())):
@@ -363,6 +389,10 @@ class SubjectUpdate(BaseModel):
     description: str | None = Field(default=None, max_length=MAX_DESC_LEN)
     sort_order: int | None = Field(default=None, ge=0, le=10000)
     grade_level: str | None = Field(default=None, max_length=32)
+    playlist_id: str | None = Field(default=None, max_length=32)
+    playlist_name: str | None = Field(default=None, max_length=80)
+    playlist_position: int | None = Field(default=None, ge=0, le=10000)
+    playlist_sort: int | None = Field(default=None, ge=0, le=1000)
 
     @field_validator("category")
     @classmethod
@@ -373,6 +403,16 @@ class SubjectUpdate(BaseModel):
             if v.lower() == cat.lower():
                 return cat
         raise ValueError(f"category must be one of: {', '.join(STEM_CATEGORIES)}")
+
+    @field_validator("playlist_id")
+    @classmethod
+    def validate_playlist_id(cls, v: str | None) -> str | None:
+        return _validate_playlist_id(v)
+
+    @field_validator("playlist_name")
+    @classmethod
+    def validate_playlist_name(cls, v: str | None) -> str | None:
+        return _validate_playlist_name(v)
 
     @field_validator("grade_level")
     @classmethod
@@ -415,6 +455,10 @@ class ScienceTopicCreate(BaseModel):
     html_ext: str = Field(default="", max_length=8)
     html_content_type: str = Field(default="", max_length=80)
     replace: bool = False
+    playlist_id: str | None = Field(default=None, max_length=32)
+    playlist_name: str | None = Field(default=None, max_length=80)
+    playlist_position: int | None = Field(default=None, ge=0, le=10000)
+    playlist_sort: int | None = Field(default=None, ge=0, le=1000)
 
     @field_validator("category")
     @classmethod
@@ -439,6 +483,16 @@ class ScienceTopicCreate(BaseModel):
     @classmethod
     def validate_facebook_video_url(cls, v: str) -> str:
         return _http_url(v, "Facebook video must be an http(s) URL")
+
+    @field_validator("playlist_id")
+    @classmethod
+    def validate_playlist_id(cls, v: str | None) -> str | None:
+        return _validate_playlist_id(v)
+
+    @field_validator("playlist_name")
+    @classmethod
+    def validate_playlist_name(cls, v: str | None) -> str | None:
+        return _validate_playlist_name(v)
 
 
 class TechnologyTopicCreate(BaseModel):

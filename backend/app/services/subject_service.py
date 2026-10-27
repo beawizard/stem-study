@@ -20,6 +20,7 @@ from app.vedic import (
     parse_ismc_mcq,
     parse_vedic_mcq,
 )
+from app.playlists import playlist_fields_for_model, playlist_update_from_payload, public_playlist_fields
 from app.validation import LevelCreate, STEM_CATEGORIES, SubjectCreate, parse_csv_questions
 
 
@@ -81,6 +82,7 @@ def create_subject(data: SubjectCreate) -> dict[str, Any]:
         "created_at": now,
         "updated_at": now,
         "deleted_at": "",
+        **playlist_fields_for_model(None, data),
     }
     try:
         db.put_item(item, condition="attribute_not_exists(PK)")
@@ -124,10 +126,10 @@ def update_subject(subject_id: str, data) -> dict[str, Any]:
     Questions inherit category/topic from the subject when listed (no per-row
     cascade) so Edit Subject stays fast even with large question banks.
     """
-    get_subject(subject_id)
+    existing = get_subject(subject_id)
     payload = data.model_dump(exclude_unset=True)
     if not payload:
-        return _public_subject(get_subject(subject_id))
+        return _public_subject(existing)
 
     now = _utcnow_iso()
     updates: dict[str, Any] = {"updated_at": now}
@@ -152,6 +154,9 @@ def update_subject(subject_id: str, data) -> dict[str, Any]:
     if "grade_level" in payload and payload["grade_level"] is not None:
         # Empty string clears the tag
         updates["grade_level"] = str(payload["grade_level"] or "").strip()
+    playlist_updates = playlist_update_from_payload(existing, payload)
+    if playlist_updates:
+        updates.update(playlist_updates)
 
     db.update_item(
         keys.subject_pk(subject_id),
@@ -794,6 +799,7 @@ def _public_subject(item: dict[str, Any]) -> dict[str, Any]:
         or item.get("interactive_html_url")
         or "",
         "created_at": item.get("created_at"),
+        **public_playlist_fields(item),
     }
 
 
