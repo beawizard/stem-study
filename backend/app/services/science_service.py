@@ -17,7 +17,8 @@ from app.services.subject_service import (
     create_subject,
     get_subject,
     reject_replace_if_name_differs,
-    slugify_subject_id,
+    display_topic_name,
+    resolve_topic_upload,
     update_subject,
     _public_subject,
 )
@@ -111,17 +112,17 @@ def start_topic_upload(data: ScienceTopicCreate, *, admin_user_id: str) -> dict[
     category = (data.category or "Science").strip() or "Science"
     if category not in STEM_CATEGORIES:
         raise ScienceError(f"category must be one of: {', '.join(STEM_CATEGORIES)}")
-    topic = data.topic.strip()
-    subject_id = slugify_subject_id(category, topic)
+    submitted = data.topic.strip()
+    subject_id, existing = resolve_topic_upload(category, submitted)
     pk = keys.subject_pk(subject_id)
-    existing = db.get_item(pk, keys.subject_meta_sk())
     live = bool(existing and not existing.get("deleted_at"))
     if live and not data.replace:
         raise ConflictError(
-            f"Topic '{topic}' already exists. Enable replace to overwrite."
+            f"Topic '{submitted}' already exists. Enable replace to overwrite."
         )
     if live and data.replace:
-        reject_replace_if_name_differs(existing, topic)
+        reject_replace_if_name_differs(existing, submitted)
+    topic = display_topic_name(existing if live else None, submitted)
 
     # Omitted or null grade, summary, and video links keep the saved values
     # when this upload replaces a topic. A value the caller actually sent is stored.

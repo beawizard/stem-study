@@ -17,7 +17,8 @@ from app.services.subject_service import (
     create_subject,
     get_subject,
     reject_replace_if_name_differs,
-    slugify_subject_id,
+    display_topic_name,
+    resolve_topic_upload,
     update_subject,
     _public_subject,
 )
@@ -77,17 +78,17 @@ def _page_keys(subject_id: str, index: int, image_ext: str, audio_ext: str) -> t
 
 def start_topic_upload(data: TechnologyTopicCreate, *, admin_user_id: str) -> dict[str, Any]:
     """Create/replace a Technology presentation topic and return presigned PUTs."""
-    topic = data.topic.strip()
-    subject_id = slugify_subject_id("Technology", topic)
+    submitted = data.topic.strip()
+    subject_id, existing = resolve_topic_upload("Technology", submitted)
     pk = keys.subject_pk(subject_id)
-    existing = db.get_item(pk, keys.subject_meta_sk())
     live = bool(existing and not existing.get("deleted_at"))
     if live and not data.replace:
         raise ConflictError(
-            f"Topic '{topic}' already exists. Enable replace to overwrite."
+            f"Topic '{submitted}' already exists. Enable replace to overwrite."
         )
     if live and data.replace:
-        reject_replace_if_name_differs(existing, topic)
+        reject_replace_if_name_differs(existing, submitted)
+    topic = display_topic_name(existing if live else None, submitted)
 
     if existing and data.grade_level is None:
         grade_level = str(existing.get("grade_level") or "")

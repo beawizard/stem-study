@@ -63,8 +63,14 @@ def _fold_marks(text: str) -> str:
     return "".join(ch for ch in decomposed if not unicodedata.combining(ch))
 
 
+def normalize_topic_name(text: str) -> str:
+    """Identity of a topic name: folded, casefolded, trimmed, one space between words."""
+    folded = _fold_marks(text or "")
+    return re.sub(r"\s+", " ", folded).strip().casefold()
+
+
 def _slug_piece(text: str) -> str:
-    folded = _fold_marks(text).lower().strip()
+    folded = normalize_topic_name(text)
     slug = re.sub(r"[^a-z0-9_-]+", "-", folded)
     return re.sub(r"-{2,}", "-", slug).strip("-_")
 
@@ -86,7 +92,7 @@ def slugify_subject_id(category: str, topic: str) -> str:
     A slug that fits is used as-is. Truncation and empty fallbacks append a
     7-char hash of the full normalized name so different names do not collide.
     """
-    normalized = _fold_marks(f"{category}-{topic}").lower().strip()
+    normalized = normalize_topic_name(f"{category}-{topic}")
     category_slug = _slug_piece(category)
     if not category_slug or not re.match(r"^[a-z]", category_slug):
         category_slug = "subject"
@@ -106,12 +112,54 @@ def reject_replace_if_name_differs(existing: dict[str, Any] | None, submitted_na
         return
     stored = str(existing.get("topic") or existing.get("name") or "").strip()
     submitted = (submitted_name or "").strip()
-    if stored.casefold() == submitted.casefold():
+    if normalize_topic_name(stored) == normalize_topic_name(submitted):
         return
     raise ReplaceNameConflict(
-        f"Cannot replace '{stored}' with '{submitted}'. "
-        "The saved topic name is different."
+        f"A different topic already uses this id ('{stored}', not '{submitted}'). "
+        "Rename this topic, or use Edit Subject to change the existing one."
     )
+
+
+def display_topic_name(existing: dict[str, Any] | None, submitted_name: str) -> str:
+    """Keep the stored spelling when the names match after normalization."""
+    submitted = (submitted_name or "").strip()
+    if not existing or existing.get("deleted_at"):
+        return submitted
+    stored = str(existing.get("topic") or existing.get("name") or "").strip()
+    if stored and normalize_topic_name(stored) == normalize_topic_name(submitted):
+        return stored
+    return submitted
+
+
+def find_live_topic(category: str, topic: str) -> dict[str, Any] | None:
+    """Live subject with this category and normalized topic name, if any."""
+    wanted_name = normalize_topic_name(topic)
+    wanted_cat = normalize_topic_name(category)
+    if not wanted_name or not wanted_cat:
+        return None
+    matches: list[dict[str, Any]] = []
+    for item in db.query_gsi1(keys.ENTITY_SUBJECT):
+        if item.get("deleted_at") or item.get("entity_type") != "SUBJECT":
+            continue
+        if normalize_topic_name(str(item.get("category") or "")) != wanted_cat:
+            continue
+        stored = str(item.get("topic") or item.get("name") or "")
+        if normalize_topic_name(stored) == wanted_name:
+            matches.append(item)
+    if not matches:
+        return None
+    matches.sort(key=lambda item: str(item.get("subject_id") or ""))
+    return matches[0]
+
+
+def resolve_topic_upload(category: str, topic: str) -> tuple[str, dict[str, Any] | None]:
+    """Reuse a live topic's stored id when the normalized name already exists."""
+    found = find_live_topic(category, topic)
+    if found and found.get("subject_id"):
+        return str(found["subject_id"]), found
+    subject_id = slugify_subject_id(category, topic)
+    existing = db.get_item(keys.subject_pk(subject_id), keys.subject_meta_sk())
+    return subject_id, existing
 
 
 def create_subject(data: SubjectCreate) -> dict[str, Any]:

@@ -8,9 +8,11 @@ import re
 import boto3
 import pytest
 
+from app import db, keys
 from app.handler import handler
-from app.services.subject_service import slugify_subject_id
-from app.validation import MAX_SUBJECT_ID_LEN, SUBJECT_ID_PATTERN
+from app.services import subject_service
+from app.services.subject_service import normalize_topic_name, slugify_subject_id
+from app.validation import MAX_SUBJECT_ID_LEN, SUBJECT_ID_PATTERN, SubjectCreate
 from tests.helpers import make_event
 
 REGION = "ap-southeast-1"
@@ -375,8 +377,10 @@ def test_truncated_names_and_fallbacks_do_not_collide(dynamodb_table, admin_head
         },
     )
     assert refused["statusCode"] == 409, refused["body"]
-    assert "Kept Name" in _error(refused)
-    assert "???" in _error(refused)
+    message = _error(refused)
+    assert "Kept Name" in message
+    assert "???" in message
+    assert "Rename this topic, or use Edit Subject to change the existing one." in message
     listed = handler(make_event("GET", "/subjects", headers=admin_headers))
     rows = json.loads(listed["body"])["subjects"]
     kept = next(row for row in rows if row["subject_id"] == stolen)
@@ -459,3 +463,128 @@ def test_explicit_empty_grade_clears_and_null_keeps(
     assert cleared["statusCode"] == 201, cleared["body"]
     assert not json.loads(cleared["body"])["grade_level"]
     assert json.loads(cleared["body"])["summary"] == "Still water."
+
+
+def _plant_legacy(subject_id: str, topic: str, *, grade: str, summary: str):
+    subject_service.create_subject(
+        SubjectCreate(
+            subject_id=subject_id,
+            category="Science",
+            topic=topic,
+            description=summary,
+            grade_level=grade,
+            sort_order=1,
+        )
+    )
+    db.update_item(
+        keys.subject_pk(subject_id),
+        keys.subject_meta_sk(),
+        {"summary": summary, "content_kind": "lesson", "science_ready": True},
+    )
+
+
+def _subjects(headers):
+    listed = handler(make_event("GET", "/subjects", headers=headers))
+    assert listed["statusCode"] == 200, listed["body"]
+    return json.loads(listed["body"])["subjects"]
+
+
+@pytest.mark.unit
+def test_legacy_ids_are_replaced_in_place(dynamodb_table, admin_headers, monkeypatch):
+    _s3_env(monkeypatch)
+    accent = "Éclairs ñandú"
+    assert slugify_subject_id("Science", accent) == "science-eclairs-nandu"
+    _plant_legacy("science-clairs-and", accent, grade="Grade 7", summary="legacy")
+    _plant_legacy("science", "???", grade="Grade 7", summary="legacy")
+
+    accent_replace = _post(
+        "/science/topics",
+        admin_headers,
+        {"category": "Science", "topic": accent, "replace": True},
+    )
+    assert accent_replace["statusCode"] == 201, accent_replace["body"]
+    accent_body = json.loads(accent_replace["body"])
+    assert accent_body["subject_id"] == "science-clairs-and"
+    assert accent_body["grade_level"] == "Grade 7"
+    assert accent_body["summary"] == "legacy"
+    assert accent_body["topic"] == accent
+
+    symbol_replace = _post(
+        "/science/topics",
+        admin_headers,
+        {"category": "Science", "topic": "???", "replace": True},
+    )
+    assert symbol_replace["statusCode"] == 201, symbol_replace["body"]
+    symbol_body = json.loads(symbol_replace["body"])
+    assert symbol_body["subject_id"] == "science"
+    assert symbol_body["grade_level"] == "Grade 7"
+    assert symbol_body["summary"] == "legacy"
+    assert symbol_body["topic"] == "???"
+
+    rows = _subjects(admin_headers)
+    accent_rows = [row for row in rows if normalize_topic_name(row["topic"]) == normalize_topic_name(accent)]
+    symbol_rows = [row for row in rows if row["topic"] == "???"]
+    assert [row["subject_id"] for row in accent_rows] == ["science-clairs-and"]
+    assert [row["subject_id"] for row in symbol_rows] == ["science"]
+    assert all(row["subject_id"] != "science-eclairs-nandu" for row in rows)
+
+
+@pytest.mark.unit
+def test_whitespace_and_case_do_not_rename_or_conflict(
+    dynamodb_table, admin_headers, monkeypatch
+):
+    _s3_env(monkeypatch)
+    assert normalize_topic_name("a b") == normalize_topic_name("a  b")
+    long_one = ("word " * 30) + "ONE"
+    long_two = long_one.replace("word ", "word  ", 1)
+    assert slugify_subject_id("Science", long_one) == slugify_subject_id("Science", long_two)
+
+    created = _post(
+        "/science/topics",
+        admin_headers,
+        {
+            "category": "Science",
+            "topic": "Photosynthesis",
+            "grade_level": "Grade 6",
+            "summary": "keep",
+        },
+    )
+    assert created["statusCode"] == 201, created["body"]
+    original_id = json.loads(created["body"])["subject_id"]
+
+    replaced = _post(
+        "/science/topics",
+        admin_headers,
+        {"category": "Science", "topic": "photosynthesis", "replace": True},
+    )
+    assert replaced["statusCode"] == 201, replaced["body"]
+    body = json.loads(replaced["body"])
+    assert body["subject_id"] == original_id
+    assert body["topic"] == "Photosynthesis"
+    assert body["grade_level"] == "Grade 6"
+    assert body["summary"] == "keep"
+
+    spaced = _post(
+        "/science/topics",
+        admin_headers,
+        {
+            "category": "Science",
+            "topic": "a b",
+            "grade_level": "Grade 8",
+            "summary": "spaced",
+        },
+    )
+    assert spaced["statusCode"] == 201, spaced["body"]
+    spaced_id = json.loads(spaced["body"])["subject_id"]
+    again = _post(
+        "/science/topics",
+        admin_headers,
+        {"category": "Science", "topic": "a  b", "replace": True},
+    )
+    assert again["statusCode"] == 201, again["body"]
+    again_body = json.loads(again["body"])
+    assert again_body["subject_id"] == spaced_id
+    assert again_body["topic"] == "a b"
+    assert again_body["grade_level"] == "Grade 8"
+    assert again_body["summary"] == "spaced"
+    assert again["statusCode"] != 409

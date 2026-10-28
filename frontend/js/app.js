@@ -1007,16 +1007,26 @@ const App = (() => {
     return Boolean(s.science_ready);
   }
 
+  function normalizeTopicName(value) {
+    return String(value || "")
+      .normalize("NFKD")
+      .replace(/[\u0300-\u036f]/g, "")
+      .replace(/\s+/g, " ")
+      .trim()
+      .toLowerCase();
+  }
+
   function findUploadedTopic(category, topicName) {
-    const name = String(topicName || "").trim();
-    const cat = String(category || "").trim();
+    const name = normalizeTopicName(topicName);
+    const cat = normalizeTopicName(category);
     if (!name) return null;
     return (
       (state._adminSubjects || []).find((s) => {
-        if ((s.category || "") !== cat || (s.topic || s.name || "") !== name) return false;
+        if (normalizeTopicName(s.category) !== cat) return false;
+        if (normalizeTopicName(s.topic || s.name) !== name) return false;
         // Technology presentations are not lesson rows. Every other upload
         // form must ignore quiz subjects that share a lesson's name.
-        if (cat === "Technology") return true;
+        if (cat === "technology") return true;
         return isLessonSubject(s);
       }) || null
     );
@@ -7545,9 +7555,8 @@ const App = (() => {
     };
     const resetUntouchedScienceFields = () => {
       for (const flag of Object.keys(sciFieldIds)) {
-        if (sciTouched[flag]) continue;
         const el = document.getElementById(sciFieldIds[flag]);
-        if (el) el.value = sciFieldDefaults[flag];
+        if (!sciTouched[flag] && el) el.value = sciFieldDefaults[flag];
         sciTouched[flag] = false;
       }
     };
@@ -7659,7 +7668,9 @@ const App = (() => {
           const keepSaved = Boolean(foundTopic && replace);
           const body = { category, topic, replace };
           // Untouched defaults (Grade 3, empty summary) must not overwrite a topic.
-          if (!keepSaved || sciTouched.grade) body.grade_level = grade || null;
+          if (!keepSaved || sciTouched.grade) {
+            body.grade_level = sciTouched.grade ? grade : grade || null;
+          }
           if (!keepSaved || sciTouched.summary) body.summary = summary;
           if (!keepSaved || sciTouched.video) body.explainer_video_url = video;
           if (!keepSaved || sciTouched.facebook) body.facebook_video_url = facebook;
@@ -7803,7 +7814,7 @@ const App = (() => {
           };
           const foundTech = findUploadedTopic("Technology", topic);
           if (!foundTech || !replace || techTouched.grade) {
-            techBody.grade_level = grade || null;
+            techBody.grade_level = techTouched.grade ? grade : grade || null;
           }
           const started = await Api.startTechnologyTopic(token(), techBody);
           const uploads = started.uploads || [];
