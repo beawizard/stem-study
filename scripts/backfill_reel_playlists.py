@@ -47,6 +47,19 @@ def _playlist_label(fields: dict | None) -> str:
     )
 
 
+def pending_count(result: dict) -> int:
+    """Updates that have not been written.
+
+    A dry run reports the whole plan. A real run reports only the rows that
+    failed or were otherwise left unwritten.
+    """
+    planned = len(result.get("updates") or [])
+    if result.get("dry_run"):
+        return planned
+    written = int(result.get("updated") or 0)
+    return max(planned - written, 0)
+
+
 def print_report(result: dict) -> None:
     updates = result.get("updates") or []
     unchanged = result.get("unchanged") or []
@@ -57,7 +70,7 @@ def print_report(result: dict) -> None:
     print(
         f"dry_run={bool(result.get('dry_run'))} force={bool(result.get('force'))} "
         f"updated={result.get('updated', 0)} "
-        f"pending={len(updates)} unchanged={len(unchanged)} "
+        f"pending={pending_count(result)} unchanged={len(unchanged)} "
         f"skipped={len(skipped)} unmatched={len(unmatched)} "
         f"duplicates={len(duplicates)} failures={len(failures)}"
     )

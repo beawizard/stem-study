@@ -709,3 +709,97 @@ def test_moving_to_mathematics_clears_playlist(dynamodb_table, admin_headers):
     assert as_science["playlist_id"] == ""
     assert as_science["playlist_position"] == 0
     assert as_science["playlist_sort"] == 0
+
+
+def _backfill_script():
+    import importlib.util
+
+    path = ROOT / "scripts" / "backfill_reel_playlists.py"
+    spec = importlib.util.spec_from_file_location("backfill_reel_playlists", path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def _summary_counts(capsys, script, result) -> dict[str, str]:
+    script.print_report(result)
+    line = next(
+        row for row in capsys.readouterr().out.splitlines() if row.startswith("dry_run=")
+    )
+    return dict(part.split("=", 1) for part in line.split())
+
+
+@pytest.mark.unit
+def test_report_pending_is_still_unwritten(dynamodb_table, capsys, monkeypatch):
+    create_subject(
+        SubjectCreate(
+            category="Science",
+            topic="Spiders",
+            subject_id="science-spiders",
+        )
+    )
+    _put_facebook("science-spiders", SPIDERS)
+    script = _backfill_script()
+    rocks = "https://www.facebook.com/reel/2222222222"
+    catalog = [
+        {
+            "name": "Ecosystems",
+            "category": "Science",
+            "playlist_id": "1838370447615931",
+            "reels": [
+                {"title": "Spiders", "url": SPIDERS},
+                {"title": "Missing topic", "url": rocks},
+            ],
+        }
+    ]
+
+    dry = apply_reel_playlist_backfill(catalog, dry_run=True)
+    dry_counts = _summary_counts(capsys, script, dry)
+    assert dry_counts["dry_run"] == "True"
+    assert dry_counts["updated"] == "0"
+    assert dry_counts["pending"] == "1"
+    assert script.pending_count(dry) == 1
+
+    from app.services.subject_service import list_subjects as real_list_subjects
+
+    def with_ghost():
+        rows = real_list_subjects()
+        rows.append(
+            {
+                "subject_id": "ghost-topic",
+                "category": "Science",
+                "facebook_video_url": rocks,
+            }
+        )
+        return rows
+
+    monkeypatch.setattr("app.services.subject_service.list_subjects", with_ghost)
+    failed = apply_reel_playlist_backfill(catalog)
+    failed_counts = _summary_counts(capsys, script, failed)
+    assert failed["updated"] == 1
+    assert len(failed["failures"]) == 1
+    assert failed_counts["dry_run"] == "False"
+    assert failed_counts["updated"] == "1"
+    assert failed_counts["pending"] == "1"
+    assert failed_counts["failures"] == "1"
+    stored = db.get_item(keys.subject_pk("science-spiders"), keys.subject_meta_sk())
+    assert stored["playlist_name"] == "Ecosystems"
+    assert db.get_item(keys.subject_pk("ghost-topic"), keys.subject_meta_sk()) is None
+
+    monkeypatch.undo()
+    db.update_item(
+        keys.subject_pk("science-spiders"),
+        keys.subject_meta_sk(),
+        {
+            "playlist_id": "",
+            "playlist_name": "",
+            "playlist_position": 0,
+            "playlist_sort": 0,
+        },
+    )
+    written = apply_reel_playlist_backfill(catalog)
+    written_counts = _summary_counts(capsys, script, written)
+    assert written["failures"] == []
+    assert written_counts["dry_run"] == "False"
+    assert written_counts["updated"] == "1"
+    assert written_counts["pending"] == "0"
