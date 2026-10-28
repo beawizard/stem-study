@@ -98,6 +98,13 @@ def is_lesson_topic(item: dict[str, Any]) -> bool:
     return bool(item.get("science_ready"))
 
 
+def _kept_text(incoming: str | None, existing: dict[str, Any] | None, key: str) -> str:
+    """Use incoming text. None on replace keeps the value already stored."""
+    if existing and incoming is None:
+        return str(existing.get(key) or "")
+    return (incoming or "").strip()
+
+
 def start_topic_upload(data: ScienceTopicCreate, *, admin_user_id: str) -> dict[str, Any]:
     """Create/replace a STEM lesson topic and optionally return presigned PUTs."""
     category = (data.category or "Science").strip() or "Science"
@@ -113,10 +120,18 @@ def start_topic_upload(data: ScienceTopicCreate, *, admin_user_id: str) -> dict[
             f"Topic '{topic}' already exists. Enable replace to overwrite."
         )
 
-    summary = (data.summary or "").strip()
-    video = (data.explainer_video_url or "").strip()
-    facebook = (data.facebook_video_url or "").strip()
-    desc = summary[:MAX_DESC_LEN]
+    # Omitted or null grade, summary, and video links keep the saved values
+    # when this upload replaces a topic. A value the caller actually sent is stored.
+    summary = _kept_text(data.summary, existing, "summary")
+    video = _kept_text(data.explainer_video_url, existing, "explainer_video_url")
+    facebook = _kept_text(data.facebook_video_url, existing, "facebook_video_url")
+    grade_level = _kept_text(data.grade_level, existing, "grade_level")
+    if existing and data.summary is None:
+        desc = str(existing.get("description") or "")
+    else:
+        desc = summary[:MAX_DESC_LEN]
+        if existing and not desc:
+            desc = str(existing.get("description") or "")
 
     if existing:
         update_subject(
@@ -124,8 +139,8 @@ def start_topic_upload(data: ScienceTopicCreate, *, admin_user_id: str) -> dict[
             SubjectUpdate(
                 category=category,
                 topic=topic,
-                description=desc or existing.get("description") or "",
-                grade_level=data.grade_level,
+                description=desc,
+                grade_level=grade_level or None,
             ),
         )
     else:
@@ -204,7 +219,7 @@ def start_topic_upload(data: ScienceTopicCreate, *, admin_user_id: str) -> dict[
             "image_url": image_url,
             "html_key": html_key,
             "html_url": html_url,
-            "grade_level": data.grade_level or "",
+            "grade_level": grade_level,
             "uploaded_by": admin_user_id,
             "updated_at": now,
         },

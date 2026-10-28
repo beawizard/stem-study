@@ -1007,6 +1007,17 @@ const App = (() => {
     return Boolean(s.science_ready);
   }
 
+  function findUploadedTopic(category, topicName) {
+    const name = String(topicName || "").trim();
+    const cat = String(category || "").trim();
+    if (!name) return null;
+    return (
+      (state._adminSubjects || []).find(
+        (s) => (s.category || "") === cat && (s.topic || s.name || "") === name
+      ) || null
+    );
+  }
+
   /** Fixed grade levels for Sign up and Profile comboboxes (order fixed). */
   const GRADE_LEVELS = [
     "Kindergarten",
@@ -7483,6 +7494,39 @@ const App = (() => {
     }
     const sciTopicSelect = document.getElementById("sci-topic-select");
     const sciTopicName = document.getElementById("sci-topic-name");
+    const sciTouched = { grade: false, summary: false, video: false, facebook: false };
+    const watchSciTouch = (id, flag) => {
+      const el = document.getElementById(id);
+      if (!el) return;
+      const mark = () => {
+        sciTouched[flag] = true;
+      };
+      el.addEventListener("input", mark);
+      el.addEventListener("change", mark);
+    };
+    watchSciTouch("sci-grade-level", "grade");
+    watchSciTouch("sci-summary", "summary");
+    watchSciTouch("sci-video", "video");
+    watchSciTouch("sci-facebook-video", "facebook");
+    const fillScienceFromTopic = (found) => {
+      if (!found) return;
+      const gradeEl = document.getElementById("sci-grade-level");
+      const summaryEl = document.getElementById("sci-summary");
+      const videoEl = document.getElementById("sci-video");
+      const facebookEl = document.getElementById("sci-facebook-video");
+      if (gradeEl && !sciTouched.grade && found.grade_level) {
+        gradeEl.value = found.grade_level;
+      }
+      if (summaryEl && !sciTouched.summary) {
+        summaryEl.value = found.summary || found.description || "";
+      }
+      if (videoEl && !sciTouched.video) {
+        videoEl.value = found.explainer_video_url || "";
+      }
+      if (facebookEl && !sciTouched.facebook) {
+        facebookEl.value = found.facebook_video_url || "";
+      }
+    };
     if (sciTopicSelect) {
       sciTopicSelect.onchange = () => {
         const v = sciTopicSelect.value || "";
@@ -7490,13 +7534,18 @@ const App = (() => {
         const summaryEl = document.getElementById("sci-summary");
         const videoEl = document.getElementById("sci-video");
         const facebookEl = document.getElementById("sci-facebook-video");
-        const gradeEl = document.getElementById("sci-grade-level");
         const htmlHint = document.getElementById("sci-html-hint");
+        sciTouched.grade = false;
+        sciTouched.summary = false;
+        sciTouched.video = false;
+        sciTouched.facebook = false;
         if (!v) {
           if (sciTopicName) sciTopicName.value = "";
           if (summaryEl) summaryEl.value = "";
           if (videoEl) videoEl.value = "";
           if (facebookEl) facebookEl.value = "";
+          const gradeEl = document.getElementById("sci-grade-level");
+          if (gradeEl) gradeEl.value = "Grade 3";
           if (htmlHint) {
             htmlHint.textContent =
               "Optional. Upload a self-contained .html lesson (example: microplastics interactive).";
@@ -7504,24 +7553,25 @@ const App = (() => {
           return;
         }
         if (sciTopicName) sciTopicName.value = v;
-        const found = (state._adminSubjects || []).find(
-          (s) =>
-            (s.category || "") === cat &&
-            (s.topic || s.name || "") === v &&
-            isLessonSubject(s)
-        );
-        if (found) {
-          if (gradeEl && found.grade_level) gradeEl.value = found.grade_level;
-          if (summaryEl) summaryEl.value = found.summary || found.description || "";
-          if (videoEl) videoEl.value = found.explainer_video_url || "";
-          if (facebookEl) facebookEl.value = found.facebook_video_url || "";
-          if (htmlHint) {
-            htmlHint.textContent = found.interactive_html_url
+        const found = findUploadedTopic(cat, v);
+        fillScienceFromTopic(found);
+        if (htmlHint) {
+          htmlHint.textContent =
+            found && found.interactive_html_url
               ? "This topic already has interactive HTML. Choose a file to replace it."
               : "Optional. Upload a self-contained .html lesson (example: microplastics interactive).";
-          }
         }
       };
+    }
+    if (sciTopicName) {
+      sciTopicName.addEventListener("input", () => {
+        const cat = (
+          document.getElementById("sci-category")?.value ||
+          state.adminUploadCategory ||
+          "Science"
+        ).trim();
+        fillScienceFromTopic(findUploadedTopic(cat, sciTopicName.value));
+      });
     }
     const sciForm = document.getElementById("admin-sci-form");
     if (sciForm) {
@@ -7579,15 +7629,14 @@ const App = (() => {
           logEl.textContent = "Saving topic…";
         }
         try {
-          const body = {
-            category,
-            topic,
-            grade_level: grade || null,
-            summary,
-            explainer_video_url: video,
-            facebook_video_url: facebook,
-            replace,
-          };
+          const foundTopic = findUploadedTopic(category, topic);
+          const keepSaved = Boolean(foundTopic && replace);
+          const body = { category, topic, replace };
+          // Untouched defaults (Grade 3, empty summary) must not overwrite a topic.
+          if (!keepSaved || sciTouched.grade) body.grade_level = grade || null;
+          if (!keepSaved || sciTouched.summary) body.summary = summary;
+          if (!keepSaved || sciTouched.video) body.explainer_video_url = video;
+          if (!keepSaved || sciTouched.facebook) body.facebook_video_url = facebook;
           if (file) {
             const ext = (file.name.split(".").pop() || "jpg").toLowerCase();
             body.image_ext = ext;
@@ -7631,11 +7680,31 @@ const App = (() => {
 
     const techTopicSelect = document.getElementById("tech-topic-select");
     const techTopicName = document.getElementById("tech-topic-name");
+    const techTouched = { grade: false };
+    const techGradeEl = document.getElementById("tech-grade-level");
+    if (techGradeEl) {
+      techGradeEl.addEventListener("change", () => {
+        techTouched.grade = true;
+      });
+    }
+    const fillTechGrade = (topicName) => {
+      if (techTouched.grade) return;
+      const found = findUploadedTopic("Technology", topicName);
+      if (techGradeEl && found && found.grade_level) {
+        techGradeEl.value = found.grade_level;
+      }
+    };
     if (techTopicSelect && techTopicName) {
       techTopicSelect.onchange = () => {
         const v = techTopicSelect.value || "";
+        techTouched.grade = false;
         if (v) techTopicName.value = v;
+        if (v) fillTechGrade(v);
+        else if (techGradeEl) techGradeEl.value = "Grade 3";
       };
+    }
+    if (techTopicName) {
+      techTopicName.addEventListener("input", () => fillTechGrade(techTopicName.value));
     }
     const techForm = document.getElementById("admin-tech-form");
     if (techForm) {
@@ -7700,13 +7769,17 @@ const App = (() => {
                 : "",
             });
           }
-          const started = await Api.startTechnologyTopic(token(), {
+          const techBody = {
             topic,
-            grade_level: grade || null,
             description: parsed.pptx ? `From ${parsed.pptx.name}` : "",
             pages: pageSpecs,
             replace,
-          });
+          };
+          const foundTech = findUploadedTopic("Technology", topic);
+          if (!foundTech || !replace || techTouched.grade) {
+            techBody.grade_level = grade || null;
+          }
+          const started = await Api.startTechnologyTopic(token(), techBody);
           const uploads = started.uploads || [];
           log(`Uploading media for ${uploads.length} page(s)…`);
           let done = 0;

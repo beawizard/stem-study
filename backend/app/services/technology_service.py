@@ -86,6 +86,11 @@ def start_topic_upload(data: TechnologyTopicCreate, *, admin_user_id: str) -> di
             f"Topic '{topic}' already exists. Enable replace to overwrite."
         )
 
+    if existing and data.grade_level is None:
+        grade_level = str(existing.get("grade_level") or "")
+    else:
+        grade_level = data.grade_level or ""
+
     if existing:
         update_subject(
             subject_id,
@@ -93,7 +98,7 @@ def start_topic_upload(data: TechnologyTopicCreate, *, admin_user_id: str) -> di
                 category="Technology",
                 topic=topic,
                 description=data.description or existing.get("description") or "",
-                grade_level=data.grade_level,
+                grade_level=grade_level or None,
             ),
         )
     else:
@@ -170,7 +175,7 @@ def start_topic_upload(data: TechnologyTopicCreate, *, admin_user_id: str) -> di
             "presentation_ready": False,
             "page_count": len(pages_out),
             "pages": pages_out,
-            "grade_level": data.grade_level or "",
+            "grade_level": grade_level,
             "uploaded_by": admin_user_id,
             "updated_at": now,
         },

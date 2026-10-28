@@ -20,7 +20,14 @@ from app.vedic import (
     parse_ismc_mcq,
     parse_vedic_mcq,
 )
-from app.validation import LevelCreate, STEM_CATEGORIES, SubjectCreate, parse_csv_questions
+from app.validation import (
+    MAX_SUBJECT_ID_LEN,
+    LevelCreate,
+    STEM_CATEGORIES,
+    SubjectCreate,
+    ensure_subject_id,
+    parse_csv_questions,
+)
 
 
 class SubjectNotFound(Exception):
@@ -40,15 +47,17 @@ def _utcnow_iso() -> str:
 
 
 def slugify_subject_id(category: str, topic: str) -> str:
-    """Build a stable subject_id from category + topic (lowercase slug)."""
+    """Build a subject_id from category + topic, within MAX_SUBJECT_ID_LEN."""
     raw = f"{category}-{topic}".lower().strip()
     s = re.sub(r"[^a-z0-9_-]+", "-", raw)
     s = re.sub(r"-{2,}", "-", s).strip("-_")
-    if not s:
+    if not s or not re.match(r"^[a-z]", s):
+        s = f"s-{s}" if s else "subject"
+    # Cut to the shared limit, then drop a hyphen or underscore left at the cut.
+    s = s[:MAX_SUBJECT_ID_LEN].strip("-_")
+    if not s or not re.match(r"^[a-z]", s):
         s = "subject"
-    if not re.match(r"^[a-z]", s):
-        s = f"s-{s}"
-    return s[:64]
+    return ensure_subject_id(s) or "subject"
 
 
 def create_subject(data: SubjectCreate) -> dict[str, Any]:

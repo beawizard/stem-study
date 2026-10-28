@@ -467,6 +467,8 @@ def _route(
             return created(subject_service.create_subject(data))  # type: ignore[arg-type]
         except ConflictError as exc:
             return bad_request(str(exc))
+        except ValueError as exc:
+            return bad_request(str(exc))
 
     # More specific /subjects/{id}/levels* routes match first (below).
     # PUT /subjects/{id} updates topic/description/category for working subject.
