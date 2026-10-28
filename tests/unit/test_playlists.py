@@ -721,11 +721,13 @@ def _backfill_script():
     return module
 
 
-def _summary_counts(capsys, script, result) -> dict[str, str]:
+def _report_text(capsys, script, result) -> str:
     script.print_report(result)
-    line = next(
-        row for row in capsys.readouterr().out.splitlines() if row.startswith("dry_run=")
-    )
+    return capsys.readouterr().out
+
+
+def _summary_counts(text: str) -> dict[str, str]:
+    line = next(row for row in text.splitlines() if row.startswith("dry_run="))
     return dict(part.split("=", 1) for part in line.split())
 
 
@@ -754,11 +756,13 @@ def test_report_pending_is_still_unwritten(dynamodb_table, capsys, monkeypatch):
     ]
 
     dry = apply_reel_playlist_backfill(catalog, dry_run=True)
-    dry_counts = _summary_counts(capsys, script, dry)
+    dry_text = _report_text(capsys, script, dry)
+    dry_counts = _summary_counts(dry_text)
     assert dry_counts["dry_run"] == "True"
     assert dry_counts["updated"] == "0"
     assert dry_counts["pending"] == "1"
     assert script.pending_count(dry) == 1
+    assert "FAILED" not in dry_text
 
     from app.services.subject_service import list_subjects as real_list_subjects
 
@@ -775,13 +779,23 @@ def test_report_pending_is_still_unwritten(dynamodb_table, capsys, monkeypatch):
 
     monkeypatch.setattr("app.services.subject_service.list_subjects", with_ghost)
     failed = apply_reel_playlist_backfill(catalog)
-    failed_counts = _summary_counts(capsys, script, failed)
+    failed_text = _report_text(capsys, script, failed)
+    failed_counts = _summary_counts(failed_text)
     assert failed["updated"] == 1
     assert len(failed["failures"]) == 1
     assert failed_counts["dry_run"] == "False"
     assert failed_counts["updated"] == "1"
     assert failed_counts["pending"] == "1"
     assert failed_counts["failures"] == "1"
+    error = failed["failures"][0]["error"]
+    update_lines = [
+        row for row in failed_text.splitlines() if row.startswith("  ") and "->" in row
+    ]
+    written_line = next(row for row in update_lines if row.startswith("  science-spiders:"))
+    failed_line = next(row for row in update_lines if row.startswith("  ghost-topic:"))
+    assert "FAILED" not in written_line
+    assert failed_line.endswith(f"FAILED ({error})")
+    assert "\nFAILURES\n" in failed_text
     stored = db.get_item(keys.subject_pk("science-spiders"), keys.subject_meta_sk())
     assert stored["playlist_name"] == "Ecosystems"
     assert db.get_item(keys.subject_pk("ghost-topic"), keys.subject_meta_sk()) is None
@@ -798,8 +812,10 @@ def test_report_pending_is_still_unwritten(dynamodb_table, capsys, monkeypatch):
         },
     )
     written = apply_reel_playlist_backfill(catalog)
-    written_counts = _summary_counts(capsys, script, written)
+    written_text = _report_text(capsys, script, written)
+    written_counts = _summary_counts(written_text)
     assert written["failures"] == []
     assert written_counts["dry_run"] == "False"
     assert written_counts["updated"] == "1"
     assert written_counts["pending"] == "0"
+    assert "FAILED" not in written_text

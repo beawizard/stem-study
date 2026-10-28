@@ -74,12 +74,20 @@ def print_report(result: dict) -> None:
         f"skipped={len(skipped)} unmatched={len(unmatched)} "
         f"duplicates={len(duplicates)} failures={len(failures)}"
     )
+    failed_errors: dict[str, str] = {}
+    if not result.get("dry_run"):
+        for failure in failures:
+            subject_id = str(failure.get("subject_id") or "")
+            if subject_id:
+                failed_errors[subject_id] = str(failure.get("error") or "error")
     if updates:
         print("UPDATES")
         for row in updates:
+            error = failed_errors.get(str(row.get("subject_id") or ""))
+            mark = f" FAILED ({error})" if error else ""
             print(
                 f"  {row['subject_id']}: {_playlist_label(row.get('before'))} "
-                f"-> {_playlist_label(row.get('after') or row)}"
+                f"-> {_playlist_label(row.get('after') or row)}{mark}"
             )
     if skipped:
         print("SKIPPED")
