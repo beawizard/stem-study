@@ -740,6 +740,8 @@ def test_german_sharp_s_matches_across_case(dynamodb_table, admin_headers, monke
     assert body["grade_level"] == "Grade 6"
     assert body["summary"] == "keep"
     assert normalize_topic_name("\ufeffStraße") == "strasse"
+    assert normalize_topic_name("Stra\ufeffße") == "strasse"
+    assert normalize_topic_name("Straße\ufeff") == "strasse"
     assert normalize_topic_name("a\u0085b") == "a b"
     assert normalize_topic_name("a\u001cb") == "a b"
     assert normalize_topic_name("a\u001fb") == "a b"
@@ -825,6 +827,75 @@ def test_update_subject_rejects_duplicate_normalized_name(dynamodb_table, admin_
     )
     assert cased["statusCode"] == 200, cased["body"]
     assert json.loads(cased["body"])["topic"] == "añadir"
+
+
+@pytest.mark.unit
+def test_category_move_rejects_name_already_in_destination(dynamodb_table, admin_headers):
+    subject_service.create_subject(
+        SubjectCreate(
+            subject_id="mathematics-fractions",
+            category="Mathematics",
+            topic="Fractions",
+        )
+    )
+    subject_service.create_subject(
+        SubjectCreate(
+            subject_id="science-y",
+            category="Science",
+            topic="Fractions",
+        )
+    )
+    moved = handler(
+        make_event(
+            "PUT",
+            "/subjects/science-y",
+            headers=admin_headers,
+            body=json.dumps({"category": "Mathematics"}),
+        )
+    )
+    assert moved["statusCode"] == 409, moved["body"]
+    assert "mathematics-fractions" in _error(moved)
+    assert "already exists" in _error(moved)
+    stayed = next(row for row in _subjects(admin_headers) if row["subject_id"] == "science-y")
+    assert stayed["category"] == "Science"
+    assert stayed["topic"] == "Fractions"
+
+
+@pytest.mark.unit
+def test_legacy_duplicate_can_be_saved_but_a_new_dup_cannot(dynamodb_table, admin_headers):
+    _put_subject("science-d1", "Dup", category="Science")
+    _put_subject("science-d2", "dup", category="Science")
+    saved = handler(
+        make_event(
+            "PUT",
+            "/subjects/science-d2",
+            headers=admin_headers,
+            body=json.dumps({"topic": "Dup"}),
+        )
+    )
+    assert saved["statusCode"] == 200, saved["body"]
+    assert json.loads(saved["body"])["topic"] == "Dup"
+    assert json.loads(saved["body"])["subject_id"] == "science-d2"
+
+    subject_service.create_subject(
+        SubjectCreate(
+            subject_id="science-other",
+            category="Science",
+            topic="Other",
+        )
+    )
+    taken = handler(
+        make_event(
+            "PUT",
+            "/subjects/science-other",
+            headers=admin_headers,
+            body=json.dumps({"topic": "Dup"}),
+        )
+    )
+    assert taken["statusCode"] == 409, taken["body"]
+    assert "already exists" in _error(taken)
+    other = next(row for row in _subjects(admin_headers) if row["subject_id"] == "science-other")
+    assert other["topic"] == "Other"
 
 
 @pytest.mark.unit

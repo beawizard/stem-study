@@ -74,10 +74,10 @@ def normalize_topic_name(text: str) -> str:
     """Identity of a topic name: NFKD, drop combining marks, casefold, trim, collapse spaces.
 
     frontend/js/app.js normalizeTopicName must stay in sync, including ß → ss,
-    final sigma ς → σ, a leading BOM, and U+001C–U+001F / U+0085 as spaces.
-    Cherokee case pairs are not special-cased in the browser.
+    final sigma ς → σ, a BOM anywhere in the name, and U+001C–U+001F / U+0085
+    as spaces. Cherokee case pairs are not special-cased in the browser.
     """
-    raw = str(text or "").lstrip("\ufeff")
+    raw = str(text or "").replace("\ufeff", "")
     folded = _fold_marks(raw)
     folded = re.sub(r"[\u001c-\u001f\u0085]", " ", folded)
     return re.sub(r"\s+", " ", folded).strip().casefold()
@@ -318,13 +318,28 @@ def update_subject(subject_id: str, data) -> dict[str, Any]:
         topic = str(payload["topic"]).strip()
         if not topic:
             raise ValueError("topic cannot be empty")
-        category_for_name = str(updates.get("category") or existing.get("category") or "")
-        other = find_live_topic(category_for_name, topic)
-        if other and str(other.get("subject_id") or "") != str(subject_id):
-            raise ConflictError(f"Subject '{other.get('subject_id')}' already exists")
         updates["topic"] = topic
         updates["name"] = topic  # keep legacy name in sync with topic
         tags_changed = True
+    else:
+        topic = str(existing.get("topic") or existing.get("name") or "").strip()
+    final_category = str(updates.get("category") or existing.get("category") or "")
+    stored_topic = str(existing.get("topic") or existing.get("name") or "")
+    stored_category = str(existing.get("category") or "")
+    name_same = normalize_topic_name(topic) == normalize_topic_name(stored_topic)
+    category_same = normalize_topic_name(final_category) == normalize_topic_name(
+        stored_category
+    )
+    topic_sent = "topic" in payload and payload["topic"] is not None
+    category_sent = "category" in payload and payload["category"] is not None
+    if (topic_sent or category_sent) and not (name_same and category_same):
+        others = [
+            item
+            for item in find_live_topics(final_category, topic)
+            if str(item.get("subject_id") or "") != str(subject_id)
+        ]
+        if others:
+            raise ConflictError(f"Subject '{others[0].get('subject_id')}' already exists")
     if "description" in payload and payload["description"] is not None:
         updates["description"] = payload["description"]
     if "sort_order" in payload and payload["sort_order"] is not None:
