@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 
 import boto3
 import pytest
@@ -72,7 +73,7 @@ def test_slugify_respects_shared_limit_and_does_not_end_with_hyphen():
     assert not over.endswith("-")
 
     empty = slugify_subject_id("***", "???")
-    assert empty == "subject"
+    assert re.fullmatch(r"subject-[0-9a-f]{7}", empty)
     assert SUBJECT_ID_PATTERN.match(empty)
 
 
@@ -143,7 +144,7 @@ def test_subject_id_exactly_at_limit_saves_and_over_limit_is_clear(
             "subject_id": too_long,
         },
     )
-    assert bad["statusCode"] in (400, 422)
+    assert bad["statusCode"] == 422
     assert _error(bad) == f"Topic id must be at most {MAX_SUBJECT_ID_LEN} characters"
 
     invalid = _post(
@@ -155,10 +156,19 @@ def test_subject_id_exactly_at_limit_saves_and_over_limit_is_clear(
             "subject_id": "Math!",
         },
     )
-    assert invalid["statusCode"] in (400, 422)
+    assert invalid["statusCode"] == 422
     message = _error(invalid)
     assert "Topic id" in message
     assert str(MAX_SUBJECT_ID_LEN) in message
+
+
+@pytest.mark.unit
+def test_other_validation_errors_keep_the_pydantic_body(dynamodb_table, user_headers):
+    resp = handler(
+        make_event("POST", "/tasks", headers=user_headers, body=json.dumps({}))
+    )
+    assert resp["statusCode"] == 422
+    assert "validation error" in _error(resp)
 
 
 @pytest.mark.unit
@@ -299,3 +309,153 @@ def test_technology_replace_keeps_grade_unless_explicit(
     )
     assert changed["statusCode"] == 201, changed["body"]
     assert json.loads(changed["body"])["grade_level"] == "Grade 1"
+
+
+@pytest.mark.unit
+def test_truncated_names_and_fallbacks_do_not_collide(dynamodb_table, admin_headers, monkeypatch):
+    _s3_env(monkeypatch)
+    one_name = "a" * 60 + "ONE"
+    two_name = "a" * 60 + "TWO"
+    one_id = slugify_subject_id("Science", one_name)
+    two_id = slugify_subject_id("Science", two_name)
+    assert one_id != two_id
+    assert len(one_id) <= MAX_SUBJECT_ID_LEN
+    assert len(two_id) <= MAX_SUBJECT_ID_LEN
+    assert SUBJECT_ID_PATTERN.match(one_id)
+    assert SUBJECT_ID_PATTERN.match(two_id)
+    assert one_id == slugify_subject_id("Science", one_name)
+    assert re.search(r"-[0-9a-f]{7}$", one_id)
+
+    symbols = slugify_subject_id("Science", "???")
+    other_symbols = slugify_subject_id("Science", "@@@")
+    non_latin = slugify_subject_id("Science", "光合作用")
+    assert re.fullmatch(r"science-[0-9a-f]{7}", symbols)
+    assert symbols != other_symbols
+    assert symbols != non_latin
+    assert non_latin.startswith("science-")
+    assert symbols == slugify_subject_id("Science", "???")
+
+    one = _post(
+        "/science/topics",
+        admin_headers,
+        {"category": "Science", "topic": one_name, "grade_level": "Grade 5", "summary": "First"},
+    )
+    two = _post(
+        "/science/topics",
+        admin_headers,
+        {"category": "Science", "topic": two_name, "grade_level": "Grade 2", "summary": "Second"},
+    )
+    assert one["statusCode"] == 201, one["body"]
+    assert two["statusCode"] == 201, two["body"]
+    assert json.loads(one["body"])["subject_id"] == one_id
+    assert json.loads(two["body"])["subject_id"] == two_id
+
+    stolen = slugify_subject_id("Science", "???")
+    holder = _post(
+        "/subjects",
+        admin_headers,
+        {
+            "category": "Science",
+            "topic": "Kept Name",
+            "subject_id": stolen,
+            "description": "do not lose this",
+            "grade_level": "Grade 9",
+        },
+    )
+    assert holder["statusCode"] == 201, holder["body"]
+    refused = _post(
+        "/science/topics",
+        admin_headers,
+        {
+            "category": "Science",
+            "topic": "???",
+            "grade_level": "Grade 1",
+            "summary": "should not land",
+            "replace": True,
+        },
+    )
+    assert refused["statusCode"] == 409, refused["body"]
+    assert "Kept Name" in _error(refused)
+    assert "???" in _error(refused)
+    listed = handler(make_event("GET", "/subjects", headers=admin_headers))
+    rows = json.loads(listed["body"])["subjects"]
+    kept = next(row for row in rows if row["subject_id"] == stolen)
+    assert kept["topic"] == "Kept Name"
+    assert kept["grade_level"] == "Grade 9"
+
+
+@pytest.mark.unit
+def test_accents_fold_into_the_slug():
+    slug = slugify_subject_id("Science", "Éclairs ñandú")
+    assert slug == "science-eclairs-nandu"
+    assert SUBJECT_ID_PATTERN.match(slug)
+
+
+@pytest.mark.unit
+def test_explicit_empty_summary_clears_description(
+    dynamodb_table, admin_headers, monkeypatch
+):
+    _s3_env(monkeypatch)
+    created = _post(
+        "/science/topics",
+        admin_headers,
+        {
+            "category": "Science",
+            "topic": "Moss",
+            "grade_level": "Grade 4",
+            "summary": "Moss grows in damp shade.",
+        },
+    )
+    assert created["statusCode"] == 201, created["body"]
+    assert json.loads(created["body"])["description"] == "Moss grows in damp shade."
+
+    cleared = _post(
+        "/science/topics",
+        admin_headers,
+        {
+            "category": "Science",
+            "topic": "Moss",
+            "summary": "",
+            "replace": True,
+        },
+    )
+    assert cleared["statusCode"] == 201, cleared["body"]
+    body = json.loads(cleared["body"])
+    assert body["summary"] == ""
+    assert body["description"] == ""
+    assert body["grade_level"] == "Grade 4"
+
+
+@pytest.mark.unit
+def test_explicit_empty_grade_clears_and_null_keeps(
+    dynamodb_table, admin_headers, monkeypatch
+):
+    _s3_env(monkeypatch)
+    created = _post(
+        "/science/topics",
+        admin_headers,
+        {
+            "category": "Science",
+            "topic": "Lakes",
+            "grade_level": "Grade 6",
+            "summary": "Still water.",
+        },
+    )
+    assert created["statusCode"] == 201, created["body"]
+
+    kept = _post(
+        "/science/topics",
+        admin_headers,
+        {"category": "Science", "topic": "Lakes", "grade_level": None, "replace": True},
+    )
+    assert kept["statusCode"] == 201, kept["body"]
+    assert json.loads(kept["body"])["grade_level"] == "Grade 6"
+
+    cleared = _post(
+        "/science/topics",
+        admin_headers,
+        {"category": "Science", "topic": "Lakes", "grade_level": "", "replace": True},
+    )
+    assert cleared["statusCode"] == 201, cleared["body"]
+    assert not json.loads(cleared["body"])["grade_level"]
+    assert json.loads(cleared["body"])["summary"] == "Still water."

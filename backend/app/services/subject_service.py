@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import hashlib
 import re
+import unicodedata
 import uuid
 from datetime import datetime, timezone
 from typing import Any
@@ -42,22 +44,74 @@ class ConflictError(Exception):
     pass
 
 
+class ReplaceNameConflict(Exception):
+    """Replace would overwrite a topic stored under a different name."""
+
+
+# 55-char stem + hyphen + 7 hex chars = the 63-char id limit.
+_ID_HASH_LEN = 7
+_ID_PREFIX_MAX = MAX_SUBJECT_ID_LEN - _ID_HASH_LEN - 1
+
+
 def _utcnow_iso() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
+def _fold_marks(text: str) -> str:
+    """NFKD, then drop combining marks so É and ñ become e and n."""
+    decomposed = unicodedata.normalize("NFKD", text or "")
+    return "".join(ch for ch in decomposed if not unicodedata.combining(ch))
+
+
+def _slug_piece(text: str) -> str:
+    folded = _fold_marks(text).lower().strip()
+    slug = re.sub(r"[^a-z0-9_-]+", "-", folded)
+    return re.sub(r"-{2,}", "-", slug).strip("-_")
+
+
+def _hashed_subject_id(prefix: str, normalized: str) -> str:
+    digest = hashlib.sha256(normalized.encode("utf-8")).hexdigest()[:_ID_HASH_LEN]
+    stem = (prefix or "").strip("-_")[:_ID_PREFIX_MAX].strip("-_")
+    if not stem or not re.match(r"^[a-z]", stem):
+        stem = "subject"
+    subject_id = ensure_subject_id(f"{stem}-{digest}")
+    if not subject_id:
+        raise ValueError(f"Topic id must be at most {MAX_SUBJECT_ID_LEN} characters")
+    return subject_id
+
+
 def slugify_subject_id(category: str, topic: str) -> str:
-    """Build a subject_id from category + topic, within MAX_SUBJECT_ID_LEN."""
-    raw = f"{category}-{topic}".lower().strip()
-    s = re.sub(r"[^a-z0-9_-]+", "-", raw)
-    s = re.sub(r"-{2,}", "-", s).strip("-_")
-    if not s or not re.match(r"^[a-z]", s):
-        s = f"s-{s}" if s else "subject"
-    # Cut to the shared limit, then drop a hyphen or underscore left at the cut.
-    s = s[:MAX_SUBJECT_ID_LEN].strip("-_")
-    if not s or not re.match(r"^[a-z]", s):
-        s = "subject"
-    return ensure_subject_id(s) or "subject"
+    """Build a subject_id from category + topic, within MAX_SUBJECT_ID_LEN.
+
+    A slug that fits is used as-is. Truncation and empty fallbacks append a
+    7-char hash of the full normalized name so different names do not collide.
+    """
+    normalized = _fold_marks(f"{category}-{topic}").lower().strip()
+    category_slug = _slug_piece(category)
+    if not category_slug or not re.match(r"^[a-z]", category_slug):
+        category_slug = "subject"
+    topic_slug = _slug_piece(topic)
+    if not topic_slug:
+        return _hashed_subject_id(category_slug, normalized)
+    full = f"{category_slug}-{topic_slug}"
+    if len(full) <= MAX_SUBJECT_ID_LEN and re.match(r"^[a-z]", full):
+        subject_id = ensure_subject_id(full)
+        return subject_id or _hashed_subject_id(category_slug, normalized)
+    return _hashed_subject_id(full, normalized)
+
+
+def reject_replace_if_name_differs(existing: dict[str, Any] | None, submitted_name: str) -> None:
+    """Refuse replace when this id is already stored under a different name."""
+    if not existing or existing.get("deleted_at"):
+        return
+    stored = str(existing.get("topic") or existing.get("name") or "").strip()
+    submitted = (submitted_name or "").strip()
+    if stored.casefold() == submitted.casefold():
+        return
+    raise ReplaceNameConflict(
+        f"Cannot replace '{stored}' with '{submitted}'. "
+        "The saved topic name is different."
+    )
 
 
 def create_subject(data: SubjectCreate) -> dict[str, Any]:

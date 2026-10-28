@@ -63,6 +63,7 @@ from urllib.parse import unquote
 from app.auth import AuthError, UserContext, get_user_context, require_admin
 from app.response import (
     bad_request,
+    conflict,
     created,
     forbidden,
     no_content,
@@ -96,6 +97,7 @@ from app.services.subject_service import (
     ConflictError,
     LevelNotFound,
     QuestionNotFound,
+    ReplaceNameConflict,
     SubjectNotFound,
 )
 from app.services.task_service import TaskNotFound
@@ -467,8 +469,6 @@ def _route(
             return created(subject_service.create_subject(data))  # type: ignore[arg-type]
         except ConflictError as exc:
             return bad_request(str(exc))
-        except ValueError as exc:
-            return bad_request(str(exc))
 
     # More specific /subjects/{id}/levels* routes match first (below).
     # PUT /subjects/{id} updates topic/description/category for working subject.
@@ -805,6 +805,8 @@ def _route(
                     data, admin_user_id=user.user_id
                 )
             )
+        except ReplaceNameConflict as exc:
+            return conflict(str(exc))
         except ConflictError as exc:
             return bad_request(str(exc))
         except ScienceError as exc:
@@ -844,6 +846,8 @@ def _route(
                     data, admin_user_id=user.user_id
                 )
             )
+        except ReplaceNameConflict as exc:
+            return conflict(str(exc))
         except ConflictError as exc:
             return bad_request(str(exc))
         except TechnologyError as exc:

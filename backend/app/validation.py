@@ -440,6 +440,11 @@ class ScienceTopicCreate(BaseModel):
     @field_validator("grade_level")
     @classmethod
     def validate_grade_level(cls, v: str | None) -> str | None:
+        # None (omitted or null) means keep. Explicit "" clears.
+        if v is None:
+            return None
+        if str(v).strip() == "":
+            return ""
         return normalize_content_grade(v)
 
     @field_validator("explainer_video_url")
@@ -471,6 +476,10 @@ class TechnologyTopicCreate(BaseModel):
     @field_validator("grade_level")
     @classmethod
     def validate_grade_level(cls, v: str | None) -> str | None:
+        if v is None:
+            return None
+        if str(v).strip() == "":
+            return ""
         return normalize_content_grade(v)
 
 
@@ -711,11 +720,14 @@ def decode_thumbnail_image(raw: str) -> tuple[bytes, str, str]:
     raise ValueError("Thumbnail must be a PNG or JPEG image")
 
 
-def format_validation_error(exc: Exception) -> str:
-    """Turn a Pydantic error into one sentence naming the field when needed."""
+def _subject_id_or_name_length_message(exc: Exception) -> str | None:
+    """Friendlier text for topic-id and name-length errors only.
+
+    Every other validation error keeps Pydantic's own message.
+    """
     errors = getattr(exc, "errors", None)
     if not callable(errors):
-        return str(exc)
+        return None
     parts: list[str] = []
     for err in errors():
         msg = str(err.get("msg") or "Invalid value")
@@ -723,14 +735,20 @@ def format_validation_error(exc: Exception) -> str:
             msg = msg[len("Value error, ") :]
         loc = [str(part) for part in (err.get("loc") or ()) if str(part) != "body"]
         field = loc[-1] if loc else ""
-        generic = msg.startswith(
-            ("Field required", "Input should be", "String should", "Value should")
+        kind = str(err.get("type") or "")
+        is_subject_id = field == "subject_id" or msg.startswith("Topic id")
+        is_name_length = field in ("topic", "name") and (
+            kind in ("string_too_long", "string_too_short")
+            or "at most" in msg
+            or "at least" in msg
         )
-        if generic and field and field.lower() not in msg.lower():
+        if not is_subject_id and not is_name_length:
+            return None
+        if field and field.lower() not in msg.lower() and not msg.startswith("Topic id"):
             parts.append(f"{field}: {msg}")
         else:
             parts.append(msg)
-    return "; ".join(parts) if parts else "Invalid request"
+    return "; ".join(parts) if parts else None
 
 
 def parse_body(model_cls: type[BaseModel], raw: str | bytes | None) -> BaseModel:
@@ -750,7 +768,10 @@ def parse_body(model_cls: type[BaseModel], raw: str | bytes | None) -> BaseModel
     try:
         return model_cls.model_validate(data)
     except Exception as exc:
-        raise ValueError(format_validation_error(exc)) from exc
+        friendly = _subject_id_or_name_length_message(exc)
+        if friendly:
+            raise ValueError(friendly) from exc
+        raise ValueError(str(exc)) from exc
 
 
 def parse_csv_questions(csv_text: str) -> list[dict[str, str]]:

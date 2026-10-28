@@ -16,6 +16,7 @@ from app.services.subject_service import (
     SubjectNotFound,
     create_subject,
     get_subject,
+    reject_replace_if_name_differs,
     slugify_subject_id,
     update_subject,
     _public_subject,
@@ -85,6 +86,8 @@ def start_topic_upload(data: TechnologyTopicCreate, *, admin_user_id: str) -> di
         raise ConflictError(
             f"Topic '{topic}' already exists. Enable replace to overwrite."
         )
+    if live and data.replace:
+        reject_replace_if_name_differs(existing, topic)
 
     if existing and data.grade_level is None:
         grade_level = str(existing.get("grade_level") or "")
@@ -98,7 +101,7 @@ def start_topic_upload(data: TechnologyTopicCreate, *, admin_user_id: str) -> di
                 category="Technology",
                 topic=topic,
                 description=data.description or existing.get("description") or "",
-                grade_level=grade_level or None,
+                grade_level=grade_level,
             ),
         )
     else:

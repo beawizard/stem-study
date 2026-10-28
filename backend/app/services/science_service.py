@@ -16,6 +16,7 @@ from app.services.subject_service import (
     SubjectNotFound,
     create_subject,
     get_subject,
+    reject_replace_if_name_differs,
     slugify_subject_id,
     update_subject,
     _public_subject,
@@ -119,9 +120,12 @@ def start_topic_upload(data: ScienceTopicCreate, *, admin_user_id: str) -> dict[
         raise ConflictError(
             f"Topic '{topic}' already exists. Enable replace to overwrite."
         )
+    if live and data.replace:
+        reject_replace_if_name_differs(existing, topic)
 
     # Omitted or null grade, summary, and video links keep the saved values
     # when this upload replaces a topic. A value the caller actually sent is stored.
+    # Explicit "" clears grade, summary, and description.
     summary = _kept_text(data.summary, existing, "summary")
     video = _kept_text(data.explainer_video_url, existing, "explainer_video_url")
     facebook = _kept_text(data.facebook_video_url, existing, "facebook_video_url")
@@ -130,8 +134,6 @@ def start_topic_upload(data: ScienceTopicCreate, *, admin_user_id: str) -> dict[
         desc = str(existing.get("description") or "")
     else:
         desc = summary[:MAX_DESC_LEN]
-        if existing and not desc:
-            desc = str(existing.get("description") or "")
 
     if existing:
         update_subject(
@@ -140,7 +142,7 @@ def start_topic_upload(data: ScienceTopicCreate, *, admin_user_id: str) -> dict[
                 category=category,
                 topic=topic,
                 description=desc,
-                grade_level=grade_level or None,
+                grade_level=grade_level,
             ),
         )
     else:

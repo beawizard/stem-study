@@ -1012,9 +1012,13 @@ const App = (() => {
     const cat = String(category || "").trim();
     if (!name) return null;
     return (
-      (state._adminSubjects || []).find(
-        (s) => (s.category || "") === cat && (s.topic || s.name || "") === name
-      ) || null
+      (state._adminSubjects || []).find((s) => {
+        if ((s.category || "") !== cat || (s.topic || s.name || "") !== name) return false;
+        // Technology presentations are not lesson rows. Every other upload
+        // form must ignore quiz subjects that share a lesson's name.
+        if (cat === "Technology") return true;
+        return isLessonSubject(s);
+      }) || null
     );
   }
 
@@ -7508,12 +7512,24 @@ const App = (() => {
     watchSciTouch("sci-summary", "summary");
     watchSciTouch("sci-video", "video");
     watchSciTouch("sci-facebook-video", "facebook");
+    const sciFieldIds = {
+      grade: "sci-grade-level",
+      summary: "sci-summary",
+      video: "sci-video",
+      facebook: "sci-facebook-video",
+    };
+    const sciFieldDefaults = {
+      grade: "Grade 3",
+      summary: "",
+      video: "",
+      facebook: "",
+    };
     const fillScienceFromTopic = (found) => {
       if (!found) return;
-      const gradeEl = document.getElementById("sci-grade-level");
-      const summaryEl = document.getElementById("sci-summary");
-      const videoEl = document.getElementById("sci-video");
-      const facebookEl = document.getElementById("sci-facebook-video");
+      const gradeEl = document.getElementById(sciFieldIds.grade);
+      const summaryEl = document.getElementById(sciFieldIds.summary);
+      const videoEl = document.getElementById(sciFieldIds.video);
+      const facebookEl = document.getElementById(sciFieldIds.facebook);
       if (gradeEl && !sciTouched.grade && found.grade_level) {
         gradeEl.value = found.grade_level;
       }
@@ -7525,6 +7541,14 @@ const App = (() => {
       }
       if (facebookEl && !sciTouched.facebook) {
         facebookEl.value = found.facebook_video_url || "";
+      }
+    };
+    const resetUntouchedScienceFields = () => {
+      for (const flag of Object.keys(sciFieldIds)) {
+        if (sciTouched[flag]) continue;
+        const el = document.getElementById(sciFieldIds[flag]);
+        if (el) el.value = sciFieldDefaults[flag];
+        sciTouched[flag] = false;
       }
     };
     if (sciTopicSelect) {
@@ -7570,7 +7594,9 @@ const App = (() => {
           state.adminUploadCategory ||
           "Science"
         ).trim();
-        fillScienceFromTopic(findUploadedTopic(cat, sciTopicName.value));
+        const found = findUploadedTopic(cat, sciTopicName.value);
+        if (found) fillScienceFromTopic(found);
+        else resetUntouchedScienceFields();
       });
     }
     const sciForm = document.getElementById("admin-sci-form");
