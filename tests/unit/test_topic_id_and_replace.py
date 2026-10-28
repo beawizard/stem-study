@@ -11,7 +11,14 @@ import pytest
 from app import db, keys
 from app.handler import handler
 from app.services import subject_service
-from app.services.subject_service import find_live_topic, normalize_topic_name, slugify_subject_id
+from app.services.subject_service import (
+    LevelNotFound,
+    find_live_topic,
+    get_level,
+    normalize_topic_name,
+    seed_math_defaults,
+    slugify_subject_id,
+)
 from app.validation import MAX_SUBJECT_ID_LEN, SUBJECT_ID_PATTERN, SubjectCreate
 from tests.helpers import make_event
 
@@ -732,3 +739,108 @@ def test_german_sharp_s_matches_across_case(dynamodb_table, admin_headers, monke
     assert body["topic"] == "Straße"
     assert body["grade_level"] == "Grade 6"
     assert body["summary"] == "keep"
+    assert normalize_topic_name("\ufeffStraße") == "strasse"
+    assert normalize_topic_name("a\u0085b") == "a b"
+    assert normalize_topic_name("a\u001cb") == "a b"
+    assert normalize_topic_name("a\u001fb") == "a b"
+
+
+@pytest.mark.unit
+def test_quiz_id_clash_names_the_id(dynamodb_table, admin_headers, monkeypatch):
+    _s3_env(monkeypatch)
+    subject_service.create_subject(
+        SubjectCreate(
+            subject_id="science-plants",
+            category="Science",
+            topic="Not Plants",
+            description="quiz bank",
+            grade_level="Grade 2",
+        )
+    )
+    blocked = _post(
+        "/science/topics",
+        admin_headers,
+        {"category": "Science", "topic": "Plants", "replace": True},
+    )
+    assert blocked["statusCode"] == 400, blocked["body"]
+    message = _error(blocked)
+    assert "topic id" in message
+    assert "science-plants" in message
+    assert "Rename this topic." in message
+    quiz = next(row for row in _subjects(admin_headers) if row["subject_id"] == "science-plants")
+    assert quiz["topic"] == "Not Plants"
+    assert quiz["content_kind"] != "lesson"
+
+
+@pytest.mark.unit
+def test_update_subject_rejects_duplicate_normalized_name(dynamodb_table, admin_headers):
+    subject_service.create_subject(
+        SubjectCreate(
+            subject_id="mathematics-legacy-x",
+            category="Mathematics",
+            topic="Añadir",
+        )
+    )
+    subject_service.create_subject(
+        SubjectCreate(
+            subject_id="mathematics-fractions",
+            category="Mathematics",
+            topic="Fractions",
+        )
+    )
+    taken = handler(
+        make_event(
+            "PUT",
+            "/subjects/mathematics-fractions",
+            headers=admin_headers,
+            body=json.dumps({"topic": "Añadir"}),
+        )
+    )
+    assert taken["statusCode"] == 409, taken["body"]
+    assert "mathematics-legacy-x" in _error(taken)
+    assert "already exists" in _error(taken)
+    fractions = next(
+        row for row in _subjects(admin_headers) if row["subject_id"] == "mathematics-fractions"
+    )
+    assert fractions["topic"] == "Fractions"
+
+    same = handler(
+        make_event(
+            "PUT",
+            "/subjects/mathematics-fractions",
+            headers=admin_headers,
+            body=json.dumps({"topic": "Fractions"}),
+        )
+    )
+    assert same["statusCode"] == 200, same["body"]
+    assert json.loads(same["body"])["topic"] == "Fractions"
+
+    cased = handler(
+        make_event(
+            "PUT",
+            "/subjects/mathematics-legacy-x",
+            headers=admin_headers,
+            body=json.dumps({"topic": "añadir"}),
+        )
+    )
+    assert cased["statusCode"] == 200, cased["body"]
+    assert json.loads(cased["body"])["topic"] == "añadir"
+
+
+@pytest.mark.unit
+def test_seed_math_defaults_uses_the_existing_arithmetic_subject(dynamodb_table):
+    subject_service.create_subject(
+        SubjectCreate(
+            subject_id="mathematics-legacy-x",
+            category="Mathematics",
+            topic="Arithmetic",
+            description="legacy",
+        )
+    )
+    result = seed_math_defaults()
+    assert result["subject_created"] is False
+    assert result["levels_created"] == 3
+    assert result["questions_imported"] > 0
+    assert len(subject_service.list_levels("mathematics-legacy-x")) == 3
+    with pytest.raises(LevelNotFound):
+        get_level("math", "l1")

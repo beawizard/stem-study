@@ -481,6 +481,8 @@ def _route(
             return ok(subject_service.update_subject(subject_id, data))  # type: ignore[arg-type]
         except SubjectNotFound:
             return not_found("Subject not found")
+        except ConflictError as exc:
+            return conflict(str(exc))
         except ValueError as exc:
             return bad_request(str(exc))
 

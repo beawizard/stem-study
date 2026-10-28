@@ -73,10 +73,13 @@ def _fold_marks(text: str) -> str:
 def normalize_topic_name(text: str) -> str:
     """Identity of a topic name: NFKD, drop combining marks, casefold, trim, collapse spaces.
 
-    frontend/js/app.js normalizeTopicName must stay in sync, including ß → ss
-    and final sigma ς → σ.
+    frontend/js/app.js normalizeTopicName must stay in sync, including ß → ss,
+    final sigma ς → σ, a leading BOM, and U+001C–U+001F / U+0085 as spaces.
+    Cherokee case pairs are not special-cased in the browser.
     """
-    folded = _fold_marks(text or "")
+    raw = str(text or "").lstrip("\ufeff")
+    folded = _fold_marks(raw)
+    folded = re.sub(r"[\u001c-\u001f\u0085]", " ", folded)
     return re.sub(r"\s+", " ", folded).strip().casefold()
 
 
@@ -150,7 +153,10 @@ def display_topic_name(existing: dict[str, Any] | None, submitted_name: str) -> 
     return submitted
 
 
-def _quiz_name_message(item: dict[str, Any]) -> str:
+def _quiz_name_message(item: dict[str, Any], *, by_id: bool = False) -> str:
+    if by_id:
+        sid = str(item.get("subject_id") or "").strip() or "this id"
+        return f"A quiz subject already uses this topic id ('{sid}'). Rename this topic."
     stored = str(item.get("topic") or item.get("name") or "this name").strip()
     return f"A quiz subject already uses this name ('{stored}'). Rename this topic."
 
@@ -215,7 +221,7 @@ def resolve_topic_upload(
         and not existing.get("deleted_at")
         and not is_lesson_topic(existing)
     ):
-        raise ConflictError(_quiz_name_message(existing))
+        raise ConflictError(_quiz_name_message(existing, by_id=True))
     return subject_id, existing
 
 
@@ -312,6 +318,10 @@ def update_subject(subject_id: str, data) -> dict[str, Any]:
         topic = str(payload["topic"]).strip()
         if not topic:
             raise ValueError("topic cannot be empty")
+        category_for_name = str(updates.get("category") or existing.get("category") or "")
+        other = find_live_topic(category_for_name, topic)
+        if other and str(other.get("subject_id") or "") != str(subject_id):
+            raise ConflictError(f"Subject '{other.get('subject_id')}' already exists")
         updates["topic"] = topic
         updates["name"] = topic  # keep legacy name in sync with topic
         tags_changed = True
@@ -869,6 +879,7 @@ def seed_math_defaults() -> dict[str, Any]:
     """Idempotent seed: Math subject + beginner levels with sample questions."""
     from app.validation import LevelCreate, SubjectCreate
 
+    seed_id = "math"
     try:
         create_subject(
             SubjectCreate(
@@ -882,6 +893,19 @@ def seed_math_defaults() -> dict[str, Any]:
         subject_created = True
     except ConflictError:
         subject_created = False
+        found = find_live_topic("Mathematics", "Arithmetic")
+        if found and found.get("subject_id"):
+            seed_id = str(found["subject_id"])
+        else:
+            try:
+                get_subject("math")
+            except SubjectNotFound:
+                return {
+                    "subject_created": False,
+                    "levels_created": 0,
+                    "questions_imported": 0,
+                }
+            seed_id = "math"
 
     levels_spec = [
         ("l1", "Level 1 – Addition", 1, "1,+,1,=,2\n2,+,3,=,5\n4,+,5,=,9\n0,+,7,=,7\n6,+,2,=,8\n"),
@@ -893,7 +917,7 @@ def seed_math_defaults() -> dict[str, Any]:
     for lid, name, order, csv_body in levels_spec:
         try:
             create_level(
-                "math",
+                seed_id,
                 LevelCreate(
                     level_id=lid,
                     name=name,
@@ -903,13 +927,13 @@ def seed_math_defaults() -> dict[str, Any]:
                 ),
             )
             levels_created += 1
-            summary = import_questions_csv("math", lid, csv_body)
+            summary = import_questions_csv(seed_id, lid, csv_body)
             questions_imported += summary["imported"]
         except ConflictError:
             # Level exists; only import if empty
-            level = get_level("math", lid)
+            level = get_level(seed_id, lid)
             if int(level.get("question_count") or 0) == 0:
-                summary = import_questions_csv("math", lid, csv_body)
+                summary = import_questions_csv(seed_id, lid, csv_body)
                 questions_imported += summary["imported"]
 
     return {
