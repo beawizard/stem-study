@@ -40,6 +40,7 @@ const App = (() => {
     /** Home lesson carousel. Kept for the session so a random fill does not reshuffle. */
     recommendedLessons: [],
     recommendedLoaded: false,
+    scrollStudyReader: false,
     /** Mastery hub / create wizard / study-within-collection */
     masteryView: "hub", // hub | create | edit | study
     masteryCreateStep: 1,
@@ -286,6 +287,8 @@ const App = (() => {
     document.body.classList.toggle("tech-mode", Boolean(active));
     const mainEl = main();
     if (mainEl) mainEl.classList.toggle("tech-mode-main", Boolean(active));
+    const catalog = Boolean(active && mainEl && mainEl.querySelector(".playlist-wrap"));
+    document.body.classList.toggle("tech-catalog", catalog);
   }
 
   /** Visible viewport height so Technology can fill the device screen. */
@@ -1315,12 +1318,16 @@ const App = (() => {
       subjectId: sid,
       category: String(category || "").trim() || "Mathematics",
     };
+    state.scrollStudyReader = true;
     navigate("study");
   }
 
-  function recommendedLessonsHtml(items) {
+  function lessonCarouselHtml(items, opts) {
     const lessons = Array.isArray(items) ? items : [];
     if (!lessons.length) return "";
+    const options = opts || {};
+    const title = String(options.title || "Recommended lessons");
+    const ariaLabel = String(options.ariaLabel || title);
     const cards = lessons
       .map((item) => {
         const subjectId = String(item.subject_id || "");
@@ -1328,7 +1335,9 @@ const App = (() => {
         const topic = String(item.topic || item.name || subjectId || "Lesson");
         const slug = category.toLowerCase().replace(/[^a-z]/g, "") || "lesson";
         const imageUrl = String(item.image_url || "").trim();
-        const htmlUrl = String(item.interactive_html_url || "").trim();
+        const htmlUrl = options.htmlPreview
+          ? String(item.interactive_html_url || "").trim()
+          : "";
         const visual = imageUrl
           ? `<img class="recommend-thumb" src="${escapeAttr(
               imageUrl
@@ -1351,24 +1360,199 @@ const App = (() => {
       })
       .join("");
     return `
-      <div class="card recommend-card">
+      <div class="card recommend-card" data-lesson-carousel>
         <div class="recommend-head">
-          <h2>Recommended lessons</h2>
+          <h2>${escapeHtml(title)}</h2>
           <div class="recommend-nav">
-            <button type="button" class="btn-icon secondary" id="recommend-prev" aria-label="Previous lessons">‹</button>
-            <button type="button" class="btn-icon secondary" id="recommend-next" aria-label="Next lessons">›</button>
+            <button type="button" class="btn-icon secondary" data-carousel-prev aria-label="Previous in ${escapeAttr(title)}">‹</button>
+            <button type="button" class="btn-icon secondary" data-carousel-next aria-label="Next in ${escapeAttr(title)}">›</button>
           </div>
         </div>
-        <div class="recommend-scroller" id="recommend-scroller" tabindex="0" role="list" aria-label="Recommended lessons">
+        <div class="recommend-scroller" data-carousel-scroller tabindex="0" role="list" aria-label="${escapeAttr(ariaLabel)}">
           ${cards}
         </div>
       </div>`;
   }
 
-  function bindRecommendCarousel() {
-    const scroller = document.getElementById("recommend-scroller");
-    if (!scroller) return;
+  function recommendedLessonsHtml(items) {
+    return lessonCarouselHtml(items, {
+      title: "Recommended lessons",
+      ariaLabel: "Recommended lessons",
+      htmlPreview: true,
+    });
+  }
 
+  function playlistOrderValue(value) {
+    const n = Number(value);
+    return Number.isFinite(n) && n > 0 ? n : 0;
+  }
+
+  function compareTopicNames(a, b) {
+    return String(a.topic || a.name || "").localeCompare(String(b.topic || b.name || ""));
+  }
+
+  function playlistSectionsHtml(topics) {
+    const list = Array.isArray(topics) ? topics : [];
+    const groups = new Map();
+    const other = [];
+    list.forEach((topic) => {
+      const playlistId = String((topic && topic.playlist_id) || "").trim();
+      const playlistName = String((topic && topic.playlist_name) || "").trim();
+      if (!playlistId && !playlistName) {
+        other.push(topic);
+        return;
+      }
+      const key = playlistId || playlistName.toLowerCase();
+      let group = groups.get(key);
+      if (!group) {
+        group = {
+          key,
+          name: playlistName || "Playlist",
+          sort: 0,
+          items: [],
+        };
+        groups.set(key, group);
+      }
+      if (playlistName && group.name === "Playlist") group.name = playlistName;
+      const sort = playlistOrderValue(topic.playlist_sort);
+      if (sort && (!group.sort || sort < group.sort)) group.sort = sort;
+      group.items.push(topic);
+    });
+    const ordered = [...groups.values()].sort((a, b) => {
+      if (a.sort !== b.sort) {
+        if (!a.sort) return 1;
+        if (!b.sort) return -1;
+        return a.sort - b.sort;
+      }
+      return a.name.localeCompare(b.name);
+    });
+    ordered.forEach((group) => {
+      group.items.sort((a, b) => {
+        const ap = playlistOrderValue(a.playlist_position);
+        const bp = playlistOrderValue(b.playlist_position);
+        if (ap !== bp) {
+          if (!ap) return 1;
+          if (!bp) return -1;
+          return ap - bp;
+        }
+        return compareTopicNames(a, b);
+      });
+    });
+    other.sort(compareTopicNames);
+    const blocks = ordered.map((group) =>
+      lessonCarouselHtml(group.items, {
+        title: group.name,
+        ariaLabel: group.name,
+      })
+    );
+    if (other.length) {
+      blocks.push(
+        lessonCarouselHtml(other, {
+          title: "Other",
+          ariaLabel: "Other topics",
+        })
+      );
+    }
+    return blocks.join("");
+  }
+
+  function readPlaylistFields(prefix) {
+    const clear = Boolean(document.getElementById(`${prefix}-clear-playlist`)?.checked);
+    if (clear) {
+      return {
+        playlist_name: "",
+        playlist_id: "",
+        playlist_position: 0,
+        playlist_sort: 0,
+      };
+    }
+    const name = (document.getElementById(`${prefix}-playlist-name`)?.value || "").trim();
+    const id = (document.getElementById(`${prefix}-playlist-id`)?.value || "").trim();
+    const positionRaw = (document.getElementById(`${prefix}-playlist-position`)?.value || "").trim();
+    const sortRaw = (document.getElementById(`${prefix}-playlist-sort`)?.value || "").trim();
+    const position = positionRaw === "" ? null : parseInt(positionRaw, 10);
+    const sort = sortRaw === "" ? null : parseInt(sortRaw, 10);
+    return {
+      playlist_name: name || null,
+      playlist_id: id || null,
+      playlist_position: Number.isFinite(position) ? position : null,
+      playlist_sort: Number.isFinite(sort) ? sort : null,
+    };
+  }
+
+  function sciencePlaylistFieldsHtml() {
+    if ((state.adminUploadCategory || "Science") === "Mathematics") return "";
+    return `
+          <div class="row">
+            <div class="grow">
+              <label for="sci-playlist-name">Playlist name</label>
+              <input id="sci-playlist-name" maxlength="80" placeholder="e.g. Ecosystems" />
+            </div>
+            <div>
+              <label for="sci-playlist-position">Position</label>
+              <input id="sci-playlist-position" type="number" min="0" max="10000" inputmode="numeric" placeholder="1" />
+            </div>
+          </div>
+          <div class="row">
+            <div class="grow">
+              <label for="sci-playlist-id">Facebook playlist id</label>
+              <input id="sci-playlist-id" maxlength="32" inputmode="numeric" placeholder="Numeric id, optional" />
+            </div>
+            <div>
+              <label for="sci-playlist-sort">Playlist order</label>
+              <input id="sci-playlist-sort" type="number" min="0" max="1000" inputmode="numeric" placeholder="1" />
+            </div>
+          </div>
+          <label class="check-row">
+            <input type="checkbox" id="sci-clear-playlist" />
+            Clear playlist
+          </label>
+          <p class="muted" style="margin:0">Leave these blank to keep the playlist already saved. Clear playlist removes it.</p>`;
+  }
+
+  function studyTopicPickerHtml(topics, topicOptions) {
+    return `
+      <div class="study-pickers study-pickers-stacked" style="max-width:22rem;margin-top:0.75rem">
+        <div class="study-picker-field">
+          <label for="study-topic">Topic</label>
+          <select id="study-topic" ${topics.length ? "" : "disabled"}>${topicOptions}</select>
+        </div>
+      </div>`;
+  }
+
+  function stemCategoryShellHtml(opts) {
+    const cardClass = opts.cardClass || "";
+    const readerClass = opts.readerClass || cardClass;
+    const title = escapeHtml(opts.title || "");
+    const picker = opts.pickerHtml || "";
+    const reader = opts.readerHtml || "";
+    const playlists = opts.playlistHtml || "";
+    const back = `<button type="button" class="btn secondary btn-sm" data-study-hub>← Study</button>`;
+    const heading = `<h1 class="study-page-title" style="margin-top:0.5rem">${title}</h1>`;
+    if (!playlists) {
+      return `
+        <div class="card study-landing-card ${cardClass}">
+          ${back}
+          ${heading}
+          ${picker}
+          ${reader}
+        </div>`;
+    }
+    return `
+      <div class="card study-landing-card ${cardClass}">
+        ${back}
+        ${heading}
+      </div>
+      <div class="playlist-wrap">${playlists}</div>
+      <div class="card study-landing-card ${readerClass}">
+        ${picker}
+        ${reader}
+      </div>`;
+  }
+
+  function bindOneLessonCarousel(card) {
+    const scroller = card.querySelector("[data-carousel-scroller]");
+    if (!scroller) return;
     let drag = null;
     scroller.addEventListener("pointerdown", (event) => {
       if (event.pointerType !== "mouse" || event.button !== 0) return;
@@ -1410,18 +1594,18 @@ const App = (() => {
       }
     });
 
-    const prev = document.getElementById("recommend-prev");
-    const next = document.getElementById("recommend-next");
+    const prev = card.querySelector("[data-carousel-prev]");
+    const next = card.querySelector("[data-carousel-next]");
     if (prev) prev.onclick = () => scroller.scrollBy({ left: -page(), behavior: "smooth" });
     if (next) next.onclick = () => scroller.scrollBy({ left: page(), behavior: "smooth" });
 
-    scroller.querySelectorAll("[data-recommend-subject]").forEach((card) => {
+    scroller.querySelectorAll("[data-recommend-subject]").forEach((item) => {
       const open = () =>
         openRecommendedLesson(
-          card.getAttribute("data-recommend-subject"),
-          card.getAttribute("data-recommend-category")
+          item.getAttribute("data-recommend-subject"),
+          item.getAttribute("data-recommend-category")
         );
-      card.addEventListener("click", (event) => {
+      item.addEventListener("click", (event) => {
         if (scroller.dataset.swiped === "1") {
           event.preventDefault();
           scroller.dataset.swiped = "";
@@ -1429,12 +1613,24 @@ const App = (() => {
         }
         open();
       });
-      card.addEventListener("keydown", (event) => {
+      item.addEventListener("keydown", (event) => {
         if (event.key !== "Enter" && event.key !== " ") return;
         event.preventDefault();
         open();
       });
     });
+  }
+
+  function bindLessonCarousels() {
+    main().querySelectorAll("[data-lesson-carousel]").forEach((card) => {
+      bindOneLessonCarousel(card);
+    });
+    if (!state.scrollStudyReader) return;
+    state.scrollStudyReader = false;
+    const reader = main().querySelector(".sci-reader, .tech-reader, .study-topic-desc");
+    if (reader && typeof reader.scrollIntoView === "function") {
+      reader.scrollIntoView({ block: "start" });
+    }
   }
 
   function viewHome(leaderboardEntries) {
@@ -1973,18 +2169,15 @@ const App = (() => {
     } else {
       readerHtml = `<p class="muted study-topic-desc">Select a Technology topic. Presentations appear as a picture book with audio and subtitles. Uploaded lessons show a summary, image, interactive HTML, and video.</p>`;
     }
-    return `
-      <div class="card study-landing-card tech-landing-card">
-        <button type="button" class="btn secondary btn-sm" data-study-hub>← Study</button>
-        <h1 class="study-page-title" style="margin-top:0.5rem">Technology</h1>
-        <div class="study-pickers study-pickers-stacked" style="max-width:22rem;margin-top:0.75rem">
-          <div class="study-picker-field">
-            <label for="study-topic">Topic</label>
-            <select id="study-topic" ${topics.length ? "" : "disabled"}>${topicOptions}</select>
-          </div>
-        </div>
-        ${readerHtml}
-      </div>`;
+    const playlistHtml = playlistSectionsHtml(topics);
+    return stemCategoryShellHtml({
+      cardClass: playlistHtml ? "" : "tech-landing-card",
+      readerClass: "tech-landing-card",
+      title: "Technology",
+      playlistHtml,
+      pickerHtml: studyTopicPickerHtml(topics, topicOptions),
+      readerHtml,
+    });
   }
 
   async function viewStudyScience() {
@@ -2049,18 +2242,13 @@ const App = (() => {
         category
       )} topic to read the summary, open the interactive lesson, and follow the explainer video.</p>`;
     }
-    return `
-      <div class="card study-landing-card sci-landing-card">
-        <button type="button" class="btn secondary btn-sm" data-study-hub>← Study</button>
-        <h1 class="study-page-title" style="margin-top:0.5rem">${escapeHtml(category)}</h1>
-        <div class="study-pickers study-pickers-stacked" style="max-width:22rem;margin-top:0.75rem">
-          <div class="study-picker-field">
-            <label for="study-topic">Topic</label>
-            <select id="study-topic" ${topics.length ? "" : "disabled"}>${topicOptions}</select>
-          </div>
-        </div>
-        ${readerHtml}
-      </div>`;
+    return stemCategoryShellHtml({
+      cardClass: "sci-landing-card",
+      title: category,
+      playlistHtml: playlistSectionsHtml(topics),
+      pickerHtml: studyTopicPickerHtml(topics, topicOptions),
+      readerHtml,
+    });
   }
 
   function videoBrandMark(kind) {
@@ -3677,6 +3865,18 @@ const App = (() => {
     const formGradeLevel = workingSubject
       ? workingSubject.grade_level || ""
       : "";
+    const formPlaylistName = workingSubject
+      ? workingSubject.playlist_name || ""
+      : "";
+    const formPlaylistId = workingSubject ? workingSubject.playlist_id || "" : "";
+    const formPlaylistPosition =
+      workingSubject && Number(workingSubject.playlist_position) > 0
+        ? String(workingSubject.playlist_position)
+        : "";
+    const formPlaylistSort =
+      workingSubject && Number(workingSubject.playlist_sort) > 0
+        ? String(workingSubject.playlist_sort)
+        : "";
 
     let schools = [];
     try {
@@ -3882,6 +4082,7 @@ const App = (() => {
               <input id="sci-facebook-video" type="url" maxlength="1000" placeholder="Facebook link" aria-label="Facebook link" />
             </div>
           </div>
+          ${sciencePlaylistFieldsHtml()}
           <label class="check-row">
             <input type="checkbox" id="sci-replace" />
             Replace this topic if it already exists
@@ -4011,6 +4212,37 @@ const App = (() => {
               <input id="subj-desc" maxlength="2000" placeholder="Optional"
                 value="${escapeAttr(formDesc)}" />
             </div>
+          </div>
+          <div id="subj-playlist-fields" class="${activeCategory === "Mathematics" ? "hidden" : ""}">
+            <div class="row">
+              <div class="grow">
+                <label for="subj-playlist-name">Playlist name</label>
+                <input id="subj-playlist-name" maxlength="80" placeholder="e.g. Forces &amp; Motion"
+                  value="${escapeAttr(formPlaylistName)}" />
+              </div>
+              <div>
+                <label for="subj-playlist-position">Position</label>
+                <input id="subj-playlist-position" type="number" min="0" max="10000" inputmode="numeric"
+                  placeholder="1" value="${escapeAttr(formPlaylistPosition)}" />
+              </div>
+            </div>
+            <div class="row">
+              <div class="grow">
+                <label for="subj-playlist-id">Facebook playlist id</label>
+                <input id="subj-playlist-id" maxlength="32" inputmode="numeric" placeholder="Numeric id, optional"
+                  value="${escapeAttr(formPlaylistId)}" />
+              </div>
+              <div>
+                <label for="subj-playlist-sort">Playlist order</label>
+                <input id="subj-playlist-sort" type="number" min="0" max="1000" inputmode="numeric"
+                  placeholder="1" value="${escapeAttr(formPlaylistSort)}" />
+              </div>
+            </div>
+            <label class="check-row">
+              <input type="checkbox" id="subj-clear-playlist" />
+              Clear playlist
+            </label>
+            <p class="muted" style="margin:0">Leave these blank to keep the playlist already saved. Clear playlist removes it. Mathematics does not use playlists.</p>
           </div>
           <div class="row" style="align-items:flex-end">
             <div>
@@ -7151,6 +7383,14 @@ const App = (() => {
       };
     }
 
+    const subjectCategory = document.getElementById("subj-category");
+    if (subjectCategory) {
+      subjectCategory.onchange = () => {
+        const box = document.getElementById("subj-playlist-fields");
+        if (box) box.classList.toggle("hidden", subjectCategory.value === "Mathematics");
+      };
+    }
+
     const subjectForm = document.getElementById("admin-subject-form");
     if (subjectForm) {
       subjectForm.onsubmit = async (e) => {
@@ -7165,12 +7405,14 @@ const App = (() => {
           const gradeLevel = (
             document.getElementById("subj-grade-level")?.value || ""
           ).trim();
+          const playlist = category === "Mathematics" ? {} : readPlaylistFields("subj");
           const created = await Api.createSubject(token(), {
             category,
             topic,
             description: document.getElementById("subj-desc").value.trim(),
             sort_order: parseInt(document.getElementById("subj-order").value, 10) || 0,
             grade_level: gradeLevel || null,
+            ...playlist,
           });
           toast(`Subject "${subjectDisplayLabel(created)}" created`);
           state.adminSubjectId = created.subject_id;
@@ -7202,12 +7444,14 @@ const App = (() => {
           const gradeLevel = (
             document.getElementById("subj-grade-level")?.value || ""
           ).trim();
+          const playlist = category === "Mathematics" ? {} : readPlaylistFields("subj");
           const payload = {
             category,
             topic,
             description: document.getElementById("subj-desc")?.value.trim() || "",
             sort_order: parseInt(document.getElementById("subj-order")?.value, 10) || 0,
             grade_level: gradeLevel,
+            ...playlist,
           };
           // Prefer Api.updateSubject; fall back if a stale-cached api.js is loaded
           const updated =
@@ -7565,6 +7809,30 @@ const App = (() => {
         sciTouched[flag] = false;
       }
     };
+    const playlistNameEl = document.getElementById("sci-playlist-name");
+    const playlistIdEl = document.getElementById("sci-playlist-id");
+    const playlistPositionEl = document.getElementById("sci-playlist-position");
+    const playlistSortEl = document.getElementById("sci-playlist-sort");
+    const clearPlaylistEl = document.getElementById("sci-clear-playlist");
+    const clearPlaylist = () => {
+      if (playlistNameEl) playlistNameEl.value = "";
+      if (playlistIdEl) playlistIdEl.value = "";
+      if (playlistPositionEl) playlistPositionEl.value = "";
+      if (playlistSortEl) playlistSortEl.value = "";
+    };
+    const fillPlaylistFromTopic = (found) => {
+      if (!found) return;
+      if (playlistNameEl) playlistNameEl.value = found.playlist_name || "";
+      if (playlistIdEl) playlistIdEl.value = found.playlist_id || "";
+      if (playlistPositionEl) {
+        playlistPositionEl.value =
+          Number(found.playlist_position) > 0 ? String(found.playlist_position) : "";
+      }
+      if (playlistSortEl) {
+        playlistSortEl.value =
+          Number(found.playlist_sort) > 0 ? String(found.playlist_sort) : "";
+      }
+    };
     if (sciTopicSelect) {
       sciTopicSelect.onchange = () => {
         const v = sciTopicSelect.value || "";
@@ -7577,6 +7845,7 @@ const App = (() => {
         sciTouched.summary = false;
         sciTouched.video = false;
         sciTouched.facebook = false;
+        if (clearPlaylistEl) clearPlaylistEl.checked = false;
         if (!v) {
           if (sciTopicName) sciTopicName.value = "";
           if (summaryEl) summaryEl.value = "";
@@ -7584,6 +7853,7 @@ const App = (() => {
           if (facebookEl) facebookEl.value = "";
           const gradeEl = document.getElementById("sci-grade-level");
           if (gradeEl) gradeEl.value = "Grade 3";
+          clearPlaylist();
           if (htmlHint) {
             htmlHint.textContent =
               "Optional. Upload a self-contained .html lesson (example: microplastics interactive).";
@@ -7593,6 +7863,8 @@ const App = (() => {
         if (sciTopicName) sciTopicName.value = v;
         const found = findUploadedTopic(cat, v);
         fillScienceFromTopic(found);
+        if (found) fillPlaylistFromTopic(found);
+        else clearPlaylist();
         if (htmlHint) {
           htmlHint.textContent =
             found && found.interactive_html_url
@@ -7609,8 +7881,13 @@ const App = (() => {
           "Science"
         ).trim();
         const found = findUploadedTopic(cat, sciTopicName.value);
-        if (found) fillScienceFromTopic(found);
-        else resetUntouchedScienceFields();
+        if (found) {
+          fillScienceFromTopic(found);
+          fillPlaylistFromTopic(found);
+        } else {
+          resetUntouchedScienceFields();
+          clearPlaylist();
+        }
       });
     }
     const sciForm = document.getElementById("admin-sci-form");
@@ -7658,6 +7935,11 @@ const App = (() => {
           toast("Facebook link must be an http(s) URL.", true);
           return;
         }
+        const playlist = category === "Mathematics" ? {} : readPlaylistFields("sci");
+        if (playlist.playlist_id && !/^\d{5,32}$/.test(playlist.playlist_id)) {
+          toast("Facebook playlist id must be the numeric id.", true);
+          return;
+        }
         if (submitBtn) submitBtn.disabled = true;
         const log = (msg) => {
           if (!logEl) return;
@@ -7671,7 +7953,7 @@ const App = (() => {
         try {
           const foundTopic = findUploadedTopic(category, topic);
           const keepSaved = Boolean(foundTopic && replace);
-          const body = { category, topic, replace };
+          const body = { category, topic, replace, ...playlist };
           // Untouched defaults (Grade 3, empty summary) must not overwrite a topic.
           if (!keepSaved || sciTouched.grade) {
             body.grade_level = sciTouched.grade ? grade : grade || null;
@@ -8397,7 +8679,7 @@ const App = (() => {
     if (lbCsv) {
       lbCsv.onclick = () => downloadLeaderboardCsv(state.leaderboardEntries);
     }
-    bindRecommendCarousel();
+    bindLessonCarousels();
     if (
       state.route === "study" &&
       !state.studyPhase &&

@@ -11,6 +11,7 @@ from urllib.parse import quote
 import boto3
 
 from app import db, keys
+from app.playlists import playlist_fields_for_model
 from app.services.subject_service import (
     ConflictError,
     SubjectNotFound,
@@ -225,6 +226,7 @@ def start_topic_upload(data: ScienceTopicCreate, *, admin_user_id: str) -> dict[
             "grade_level": grade_level,
             "uploaded_by": admin_user_id,
             "updated_at": now,
+            **playlist_fields_for_model(existing, data),
         },
     )
     pub = public_science_topic(get_subject(subject_id))

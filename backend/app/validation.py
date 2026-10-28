@@ -313,7 +313,56 @@ class TaskUpdate(BaseModel):
         return ensure_subject_id(v, allow_blank=True)
 
 
-class SubjectCreate(BaseModel):
+def _validate_playlist_id(value: str | None) -> str | None:
+    from app.playlists import clean_playlist_id
+
+    return clean_playlist_id(value)
+
+
+def _validate_playlist_name(value: str | None) -> str | None:
+    from app.playlists import clean_playlist_name
+
+    return clean_playlist_name(value)
+
+
+def _reject_playlist_on_mathematics(model: Any) -> None:
+    category = getattr(model, "category", None)
+    if category != "Mathematics":
+        return
+    fields_set = getattr(model, "model_fields_set", set())
+    for name in ("playlist_id", "playlist_name", "playlist_position", "playlist_sort"):
+        if name not in fields_set:
+            continue
+        if getattr(model, name) is None:
+            continue
+        raise ValueError("Mathematics topics do not use playlists")
+
+
+class PlaylistMembership(BaseModel):
+    """Playlist fields shared by subject create, subject update, and science upload."""
+
+    playlist_id: str | None = Field(default=None, max_length=32)
+    playlist_name: str | None = Field(default=None, max_length=80)
+    playlist_position: int | None = Field(default=None, ge=0, le=10000)
+    playlist_sort: int | None = Field(default=None, ge=0, le=1000)
+
+    @field_validator("playlist_id")
+    @classmethod
+    def validate_playlist_id(cls, v: str | None) -> str | None:
+        return _validate_playlist_id(v)
+
+    @field_validator("playlist_name")
+    @classmethod
+    def validate_playlist_name(cls, v: str | None) -> str | None:
+        return _validate_playlist_name(v)
+
+    @model_validator(mode="after")
+    def reject_playlist_for_mathematics(self):
+        _reject_playlist_on_mathematics(self)
+        return self
+
+
+class SubjectCreate(PlaylistMembership):
     """Create a subject (topic) under a STEM category.
 
     Preferred fields: category + topic. subject_id is optional (auto-slugged).
@@ -364,7 +413,7 @@ class SubjectCreate(BaseModel):
         return (self.topic or self.name or "").strip()
 
 
-class SubjectUpdate(BaseModel):
+class SubjectUpdate(PlaylistMembership):
     """Partial update of a subject (topic, description, category, sort_order, grade)."""
 
     model_config = ConfigDict(str_strip_whitespace=True, extra="forbid")
@@ -410,7 +459,7 @@ class TechnologyPageSpec(BaseModel):
     audio_content_type: str = Field(default="", max_length=80)
 
 
-class ScienceTopicCreate(BaseModel):
+class ScienceTopicCreate(PlaylistMembership):
     """POST /science/topics — admin uploads a STEM lesson topic (any STEM category)."""
 
     model_config = ConfigDict(str_strip_whitespace=True, extra="forbid")
