@@ -18,6 +18,7 @@ from app.services.subject_service import (
     get_subject,
     reject_replace_if_name_differs,
     display_topic_name,
+    is_lesson_topic,
     resolve_topic_upload,
     update_subject,
     _public_subject,
@@ -93,13 +94,6 @@ def _html_key(category: str, subject_id: str) -> str:
     return f"{_s3_prefix(category)}/{subject_id}/interactive.html"
 
 
-def is_lesson_topic(item: dict[str, Any]) -> bool:
-    kind = (item.get("content_kind") or "").strip()
-    if kind in ("science", "lesson"):
-        return True
-    return bool(item.get("science_ready"))
-
-
 def _kept_text(incoming: str | None, existing: dict[str, Any] | None, key: str) -> str:
     """Use incoming text. None on replace keeps the value already stored."""
     if existing and incoming is None:
@@ -113,7 +107,13 @@ def start_topic_upload(data: ScienceTopicCreate, *, admin_user_id: str) -> dict[
     if category not in STEM_CATEGORIES:
         raise ScienceError(f"category must be one of: {', '.join(STEM_CATEGORIES)}")
     submitted = data.topic.strip()
-    subject_id, existing = resolve_topic_upload(category, submitted)
+    # Technology presentations are not lesson rows. Every other category must
+    # not reuse or convert a quiz subject the upload form does not list.
+    subject_id, existing = resolve_topic_upload(
+        category,
+        submitted,
+        lessons_only=category != "Technology",
+    )
     pk = keys.subject_pk(subject_id)
     live = bool(existing and not existing.get("deleted_at"))
     if live and not data.replace:

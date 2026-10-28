@@ -11,7 +11,7 @@ import pytest
 from app import db, keys
 from app.handler import handler
 from app.services import subject_service
-from app.services.subject_service import normalize_topic_name, slugify_subject_id
+from app.services.subject_service import find_live_topic, normalize_topic_name, slugify_subject_id
 from app.validation import MAX_SUBJECT_ID_LEN, SUBJECT_ID_PATTERN, SubjectCreate
 from tests.helpers import make_event
 
@@ -365,6 +365,11 @@ def test_truncated_names_and_fallbacks_do_not_collide(dynamodb_table, admin_head
         },
     )
     assert holder["statusCode"] == 201, holder["body"]
+    db.update_item(
+        keys.subject_pk(stolen),
+        keys.subject_meta_sk(),
+        {"content_kind": "lesson", "science_ready": True},
+    )
     refused = _post(
         "/science/topics",
         admin_headers,
@@ -588,3 +593,142 @@ def test_whitespace_and_case_do_not_rename_or_conflict(
     assert again_body["grade_level"] == "Grade 8"
     assert again_body["summary"] == "spaced"
     assert again["statusCode"] != 409
+
+
+def _put_subject(
+    subject_id: str,
+    topic: str,
+    *,
+    category: str = "Science",
+    deleted_at: str = "",
+    content_kind: str = "",
+    science_ready: bool = False,
+    grade_level: str = "Grade 1",
+):
+    db.put_item(
+        {
+            "PK": keys.subject_pk(subject_id),
+            "SK": keys.subject_meta_sk(),
+            "GSI1PK": keys.ENTITY_SUBJECT,
+            "GSI1SK": f"00000#{subject_id}",
+            "entity_type": "SUBJECT",
+            "subject_id": subject_id,
+            "category": category,
+            "topic": topic,
+            "name": topic,
+            "description": "",
+            "summary": "planted",
+            "grade_level": grade_level,
+            "content_kind": content_kind,
+            "science_ready": science_ready,
+            "sort_order": 0,
+            "deleted_at": deleted_at,
+        }
+    )
+
+
+@pytest.mark.unit
+def test_find_live_topic_lowest_id_and_skips_deleted(dynamodb_table):
+    _put_subject("m-shared", "Shared", deleted_at="2020-01-01T00:00:00Z")
+    _put_subject("b-shared", "Shared")
+    _put_subject("a-shared", "Shared")
+    found = find_live_topic("Science", "Shared")
+    assert found is not None
+    assert found["subject_id"] == "a-shared"
+    _put_subject("only-gone", "Gone", deleted_at="2020-01-01T00:00:00Z")
+    assert find_live_topic("Science", "Gone") is None
+
+
+@pytest.mark.unit
+def test_upload_does_not_convert_a_quiz(dynamodb_table, admin_headers, monkeypatch):
+    _s3_env(monkeypatch)
+    subject_service.create_subject(
+        SubjectCreate(
+            subject_id="science-quizzy",
+            category="Science",
+            topic="Quizzy",
+            description="A question bank",
+            grade_level="Grade 4",
+        )
+    )
+    blocked = _post(
+        "/science/topics",
+        admin_headers,
+        {"category": "Science", "topic": "Quizzy"},
+    )
+    assert blocked["statusCode"] == 400, blocked["body"]
+    assert "Rename this topic." in _error(blocked)
+    assert "quiz" in _error(blocked).lower()
+
+    replaced = _post(
+        "/science/topics",
+        admin_headers,
+        {
+            "category": "Science",
+            "topic": "Quizzy",
+            "replace": True,
+            "grade_level": "Grade 1",
+            "summary": "should not land",
+        },
+    )
+    assert replaced["statusCode"] == 400, replaced["body"]
+    assert "Rename this topic." in _error(replaced)
+    quiz = next(row for row in _subjects(admin_headers) if row["subject_id"] == "science-quizzy")
+    assert quiz["content_kind"] != "lesson"
+    assert quiz["grade_level"] == "Grade 4"
+    assert quiz["topic"] == "Quizzy"
+
+
+@pytest.mark.unit
+def test_math_create_reuses_normalized_name_as_conflict(dynamodb_table, admin_headers):
+    subject_service.create_subject(
+        SubjectCreate(
+            subject_id="mathematics-legacy-x",
+            category="Mathematics",
+            topic="Añadir",
+            description="legacy",
+        )
+    )
+    assert slugify_subject_id("Mathematics", "Añadir") == "mathematics-anadir"
+    duplicate = _post(
+        "/subjects",
+        admin_headers,
+        {"category": "Mathematics", "topic": "Añadir"},
+    )
+    assert duplicate["statusCode"] == 400, duplicate["body"]
+    assert "mathematics-legacy-x" in _error(duplicate)
+    assert "already exists" in _error(duplicate)
+    rows = _subjects(admin_headers)
+    matched = [row for row in rows if normalize_topic_name(row["topic"]) == normalize_topic_name("Añadir")]
+    assert [row["subject_id"] for row in matched] == ["mathematics-legacy-x"]
+
+
+@pytest.mark.unit
+def test_german_sharp_s_matches_across_case(dynamodb_table, admin_headers, monkeypatch):
+    _s3_env(monkeypatch)
+    assert normalize_topic_name("Straße") == normalize_topic_name("STRASSE")
+    assert normalize_topic_name("Straße") == "strasse"
+    assert normalize_topic_name("ς") == normalize_topic_name("Σ")
+    created = _post(
+        "/science/topics",
+        admin_headers,
+        {
+            "category": "Science",
+            "topic": "Straße",
+            "grade_level": "Grade 6",
+            "summary": "keep",
+        },
+    )
+    assert created["statusCode"] == 201, created["body"]
+    original_id = json.loads(created["body"])["subject_id"]
+    replaced = _post(
+        "/science/topics",
+        admin_headers,
+        {"category": "Science", "topic": "STRASSE", "replace": True},
+    )
+    assert replaced["statusCode"] == 201, replaced["body"]
+    body = json.loads(replaced["body"])
+    assert body["subject_id"] == original_id
+    assert body["topic"] == "Straße"
+    assert body["grade_level"] == "Grade 6"
+    assert body["summary"] == "keep"

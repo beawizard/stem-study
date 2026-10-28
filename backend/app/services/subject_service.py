@@ -64,9 +64,21 @@ def _fold_marks(text: str) -> str:
 
 
 def normalize_topic_name(text: str) -> str:
-    """Identity of a topic name: folded, casefolded, trimmed, one space between words."""
+    """Identity of a topic name: NFKD, drop combining marks, casefold, trim, collapse spaces.
+
+    frontend/js/app.js normalizeTopicName must stay in sync, including ß → ss
+    and final sigma ς → σ.
+    """
     folded = _fold_marks(text or "")
     return re.sub(r"\s+", " ", folded).strip().casefold()
+
+
+def is_lesson_topic(item: dict[str, Any]) -> bool:
+    """Lesson rows the science upload form edits. Technology presentations are not these."""
+    kind = (item.get("content_kind") or "").strip()
+    if kind in ("science", "lesson"):
+        return True
+    return bool(item.get("science_ready"))
 
 
 def _slug_piece(text: str) -> str:
@@ -131,12 +143,17 @@ def display_topic_name(existing: dict[str, Any] | None, submitted_name: str) -> 
     return submitted
 
 
-def find_live_topic(category: str, topic: str) -> dict[str, Any] | None:
-    """Live subject with this category and normalized topic name, if any."""
+def _quiz_name_message(item: dict[str, Any]) -> str:
+    stored = str(item.get("topic") or item.get("name") or "this name").strip()
+    return f"A quiz subject already uses this name ('{stored}'). Rename this topic."
+
+
+def find_live_topics(category: str, topic: str) -> list[dict[str, Any]]:
+    """Live subjects with this category and normalized name, lowest subject_id first."""
     wanted_name = normalize_topic_name(topic)
     wanted_cat = normalize_topic_name(category)
     if not wanted_name or not wanted_cat:
-        return None
+        return []
     matches: list[dict[str, Any]] = []
     for item in db.query_gsi1(keys.ENTITY_SUBJECT):
         if item.get("deleted_at") or item.get("entity_type") != "SUBJECT":
@@ -146,25 +163,61 @@ def find_live_topic(category: str, topic: str) -> dict[str, Any] | None:
         stored = str(item.get("topic") or item.get("name") or "")
         if normalize_topic_name(stored) == wanted_name:
             matches.append(item)
-    if not matches:
-        return None
     matches.sort(key=lambda item: str(item.get("subject_id") or ""))
-    return matches[0]
+    return matches
 
 
-def resolve_topic_upload(category: str, topic: str) -> tuple[str, dict[str, Any] | None]:
-    """Reuse a live topic's stored id when the normalized name already exists."""
-    found = find_live_topic(category, topic)
-    if found and found.get("subject_id"):
+def find_live_topic(category: str, topic: str) -> dict[str, Any] | None:
+    """Live subject with this category and normalized topic name, if any.
+
+    When several match, the lowest subject_id wins. Deleted rows are skipped.
+    """
+    matches = find_live_topics(category, topic)
+    return matches[0] if matches else None
+
+
+def resolve_topic_upload(
+    category: str,
+    topic: str,
+    *,
+    lessons_only: bool = False,
+) -> tuple[str, dict[str, Any] | None]:
+    """Reuse a live topic's stored id when the normalized name already exists.
+
+    Science, Engineering, and Mathematics uploads only reuse lesson rows, matching
+    the admin form. Technology is exempt. A quiz with that name or id is rejected
+    instead of being turned into a lesson.
+    """
+    matches = find_live_topics(category, topic)
+    if lessons_only:
+        lessons = [item for item in matches if is_lesson_topic(item)]
+        if lessons:
+            found = lessons[0]
+            return str(found["subject_id"]), found
+        if matches:
+            raise ConflictError(_quiz_name_message(matches[0]))
+    elif matches:
+        found = matches[0]
         return str(found["subject_id"]), found
+
     subject_id = slugify_subject_id(category, topic)
     existing = db.get_item(keys.subject_pk(subject_id), keys.subject_meta_sk())
+    if (
+        lessons_only
+        and existing
+        and not existing.get("deleted_at")
+        and not is_lesson_topic(existing)
+    ):
+        raise ConflictError(_quiz_name_message(existing))
     return subject_id, existing
 
 
 def create_subject(data: SubjectCreate) -> dict[str, Any]:
     topic = data.resolved_topic()
     category = data.category
+    found = find_live_topic(category, topic)
+    if found:
+        raise ConflictError(f"Subject '{found.get('subject_id')}' already exists")
     subject_id = data.subject_id or slugify_subject_id(category, topic)
 
     pk = keys.subject_pk(subject_id)

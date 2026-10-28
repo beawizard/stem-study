@@ -1007,13 +1007,18 @@ const App = (() => {
     return Boolean(s.science_ready);
   }
 
+  // Keep in sync with normalize_topic_name in backend/app/services/subject_service.py:
+  // NFKD, drop every combining mark, lower-case, then Python casefold extras
+  // (ß → ss, final sigma ς → σ), trim, and collapse internal whitespace.
   function normalizeTopicName(value) {
     return String(value || "")
       .normalize("NFKD")
-      .replace(/[\u0300-\u036f]/g, "")
+      .replace(/\p{M}/gu, "")
+      .toLowerCase()
+      .replace(/ß/g, "ss")
+      .replace(/ς/g, "σ")
       .replace(/\s+/g, " ")
-      .trim()
-      .toLowerCase();
+      .trim();
   }
 
   function findUploadedTopic(category, topicName) {
