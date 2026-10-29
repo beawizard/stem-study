@@ -16,7 +16,9 @@ from app.services.subject_service import (
     SubjectNotFound,
     create_subject,
     get_subject,
-    slugify_subject_id,
+    reject_replace_if_name_differs,
+    display_topic_name,
+    resolve_topic_upload,
     update_subject,
     _public_subject,
 )
@@ -76,15 +78,22 @@ def _page_keys(subject_id: str, index: int, image_ext: str, audio_ext: str) -> t
 
 def start_topic_upload(data: TechnologyTopicCreate, *, admin_user_id: str) -> dict[str, Any]:
     """Create/replace a Technology presentation topic and return presigned PUTs."""
-    topic = data.topic.strip()
-    subject_id = slugify_subject_id("Technology", topic)
+    submitted = data.topic.strip()
+    subject_id, existing = resolve_topic_upload("Technology", submitted)
     pk = keys.subject_pk(subject_id)
-    existing = db.get_item(pk, keys.subject_meta_sk())
     live = bool(existing and not existing.get("deleted_at"))
     if live and not data.replace:
         raise ConflictError(
-            f"Topic '{topic}' already exists. Enable replace to overwrite."
+            f"Topic '{submitted}' already exists. Enable replace to overwrite."
         )
+    if live and data.replace:
+        reject_replace_if_name_differs(existing, submitted)
+    topic = display_topic_name(existing if live else None, submitted)
+
+    if existing and data.grade_level is None:
+        grade_level = str(existing.get("grade_level") or "")
+    else:
+        grade_level = data.grade_level or ""
 
     if existing:
         update_subject(
@@ -93,7 +102,7 @@ def start_topic_upload(data: TechnologyTopicCreate, *, admin_user_id: str) -> di
                 category="Technology",
                 topic=topic,
                 description=data.description or existing.get("description") or "",
-                grade_level=data.grade_level,
+                grade_level=grade_level,
             ),
         )
     else:
@@ -170,7 +179,7 @@ def start_topic_upload(data: TechnologyTopicCreate, *, admin_user_id: str) -> di
             "presentation_ready": False,
             "page_count": len(pages_out),
             "pages": pages_out,
-            "grade_level": data.grade_level or "",
+            "grade_level": grade_level,
             "uploaded_by": admin_user_id,
             "updated_at": now,
         },

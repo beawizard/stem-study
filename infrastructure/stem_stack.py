@@ -40,6 +40,16 @@ BACKEND_DIR = ROOT / "backend"
 FRONTEND_DIR = ROOT / "frontend"
 
 
+def _context_true(scope: Construct, key: str) -> bool:
+    """True only when CDK context is boolean true or the string \"true\"."""
+    value = scope.node.try_get_context(key)
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        return value.strip().lower() == "true"
+    return False
+
+
 class StemStack(Stack):
     def __init__(
         self,
@@ -92,6 +102,7 @@ class StemStack(Stack):
             distribution=distribution,
             distribution_paths=["/*"] if distribution else None,
             memory_limit=256,
+            prune=False,
         )
 
         CfnOutput(self, "HttpApiUrl", value=http_api.api_endpoint)
@@ -399,16 +410,21 @@ class StemStack(Stack):
             methods=[apigwv2.HttpMethod.GET],
             integration=integration,
         )
-        http_api.add_routes(
-            path="/schools",
-            methods=[apigwv2.HttpMethod.GET],
-            integration=integration,
-        )
-        http_api.add_routes(
-            path="/schools/requests",
-            methods=[apigwv2.HttpMethod.POST],
-            integration=integration,
-        )
+        # Dev HttpApi already has these two public routes outside the stack.
+        # skipSchoolsRoutes=true omits them (and the permissions add_routes
+        # would add) so deploy does not conflict. Default is false.
+        skip_schools_routes = _context_true(self, "skipSchoolsRoutes")
+        if not skip_schools_routes:
+            http_api.add_routes(
+                path="/schools",
+                methods=[apigwv2.HttpMethod.GET],
+                integration=integration,
+            )
+            http_api.add_routes(
+                path="/schools/requests",
+                methods=[apigwv2.HttpMethod.POST],
+                integration=integration,
+            )
         http_api.add_routes(
             path="/{proxy+}",
             methods=[
