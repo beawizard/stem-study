@@ -92,6 +92,7 @@ class StemStack(Stack):
             distribution=distribution,
             distribution_paths=["/*"] if distribution else None,
             memory_limit=256,
+            prune=False,
         )
 
         CfnOutput(self, "HttpApiUrl", value=http_api.api_endpoint)
