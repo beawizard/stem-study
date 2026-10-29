@@ -1086,6 +1086,25 @@ const App = (() => {
     return opts.join("");
   }
 
+  /** Drop a previous free-text "(current)" option, then select grade. */
+  function syncUploadGradeOption(selectEl, grade) {
+    if (!selectEl) return;
+    const value = String(grade || "").trim();
+    const stale =
+      typeof selectEl.querySelector === "function"
+        ? selectEl.querySelector("option[data-current-grade]")
+        : null;
+    if (stale && typeof stale.remove === "function") stale.remove();
+    if (value && GRADE_LEVELS.indexOf(value) === -1) {
+      const opt = document.createElement("option");
+      opt.value = value;
+      opt.textContent = value + " (current)";
+      opt.setAttribute("data-current-grade", "1");
+      selectEl.appendChild(opt);
+    }
+    selectEl.value = value;
+  }
+
   function viewAuth() {
     return `
       <div class="card">
@@ -7800,7 +7819,8 @@ const App = (() => {
       const facebookEl = document.getElementById(sciFieldIds.facebook);
       if (gradeEl && !sciTouched.grade) {
         // Grade 3 is only the new-topic default. A stored empty grade stays blank.
-        gradeEl.value = gradeLevelForUpload(found.grade_level);
+        // A free-text grade gets a "(current)" option that is removed on the next fill.
+        syncUploadGradeOption(gradeEl, gradeLevelForUpload(found.grade_level));
       }
       if (summaryEl && !sciTouched.summary) {
         summaryEl.value = found.summary || found.description || "";
@@ -7815,7 +7835,10 @@ const App = (() => {
     const resetUntouchedScienceFields = () => {
       for (const flag of Object.keys(sciFieldIds)) {
         const el = document.getElementById(sciFieldIds[flag]);
-        if (!sciTouched[flag] && el) el.value = sciFieldDefaults[flag];
+        if (!sciTouched[flag] && el) {
+          if (flag === "grade") syncUploadGradeOption(el, sciFieldDefaults.grade);
+          else el.value = sciFieldDefaults[flag];
+        }
         sciTouched[flag] = false;
       }
     };
@@ -7862,7 +7885,7 @@ const App = (() => {
           if (videoEl) videoEl.value = "";
           if (facebookEl) facebookEl.value = "";
           const gradeEl = document.getElementById("sci-grade-level");
-          if (gradeEl) gradeEl.value = "Grade 3";
+          if (gradeEl) syncUploadGradeOption(gradeEl, "Grade 3");
           clearPlaylist();
           if (htmlHint) {
             htmlHint.textContent =
@@ -8025,10 +8048,10 @@ const App = (() => {
       if (techTouched.grade) return;
       const found = findUploadedTopic("Technology", topicName);
       if (techGradeEl && found) {
-        techGradeEl.value = gradeLevelForUpload(found.grade_level);
+        syncUploadGradeOption(techGradeEl, gradeLevelForUpload(found.grade_level));
       } else if (techGradeEl) {
         // A new name is not the blank topic. Grade 3 is the new-topic default.
-        techGradeEl.value = "Grade 3";
+        syncUploadGradeOption(techGradeEl, "Grade 3");
       }
     };
     if (techTopicSelect && techTopicName) {
@@ -8037,7 +8060,7 @@ const App = (() => {
         techTouched.grade = false;
         if (v) techTopicName.value = v;
         if (v) fillTechGrade(v);
-        else if (techGradeEl) techGradeEl.value = "Grade 3";
+        else if (techGradeEl) syncUploadGradeOption(techGradeEl, "Grade 3");
       };
     }
     if (techTopicName) {

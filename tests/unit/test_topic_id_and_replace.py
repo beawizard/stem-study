@@ -1116,8 +1116,12 @@ def test_upload_form_shows_blank_grade_when_stored_grade_is_empty():
     assert "&& found.grade_level" not in fill
     tech = src[src.index("const fillTechGrade") : src.index("if (techTopicSelect")]
     assert "gradeLevelForUpload(found.grade_level)" in tech
+    assert "syncUploadGradeOption(techGradeEl, gradeLevelForUpload(found.grade_level))" in tech
+    assert 'syncUploadGradeOption(techGradeEl, "Grade 3")' in tech
     assert "&& found.grade_level" not in tech
-    assert 'techGradeEl.value = "Grade 3"' in tech
+    reset = src[src.index("const resetUntouchedScienceFields") : src.index("const playlistNameEl")]
+    assert 'syncUploadGradeOption(el, sciFieldDefaults.grade)' in reset
+    assert "syncUploadGradeOption(gradeEl, gradeLevelForUpload(found.grade_level))" in fill
     # A brand-new topic still starts at Grade 3. Science and Technology each have one.
     assert src.count('gradeSelectOptionsHtml("Grade 3")') == 2
 
@@ -1177,6 +1181,93 @@ if (techGrade !== "Grade 3") {
         text=True,
     )
     assert result.returncode == 0, result.stderr or result.stdout
+
+    grade_fn = re.search(
+        r"function syncUploadGradeOption\(selectEl, grade\) \{\n(?P<body>.*?)\n  \}",
+        src,
+        re.S,
+    )
+    assert grade_fn, "syncUploadGradeOption missing"
+    grade_script = (
+        "globalThis.GRADE_LEVELS = "
+        + json.dumps(
+            [
+                "Kindergarten",
+                "Grade 1",
+                "Grade 2",
+                "Grade 3",
+                "Grade 4",
+                "Grade 5",
+                "Grade 6",
+                "Grade 7",
+                "Grade 8",
+                "Grade 9",
+                "Grade 10",
+                "Grade 11",
+                "Grade 12",
+            ]
+        )
+        + ";\n"
+        + "const syncUploadGradeOption = new Function('selectEl', 'grade', "
+        + json.dumps(grade_fn.group("body"))
+        + ");\n"
+        + r"""
+function makeSelect() {
+  const options = [];
+  return {
+    value: "",
+    options,
+    querySelector() {
+      return options.find((opt) => opt.getAttribute("data-current-grade")) || null;
+    },
+    appendChild(opt) {
+      opt.remove = () => {
+        const at = options.indexOf(opt);
+        if (at >= 0) options.splice(at, 1);
+      };
+      options.push(opt);
+    },
+  };
+}
+globalThis.document = {
+  createElement() {
+    const attrs = {};
+    return {
+      value: "",
+      textContent: "",
+      setAttribute(name, val) { attrs[name] = String(val); },
+      getAttribute(name) { return attrs[name] || null; },
+    };
+  },
+};
+const select = makeSelect();
+syncUploadGradeOption(select, "Grades 4-6 mixed");
+if (select.value !== "Grades 4-6 mixed") process.exit(1);
+if (select.options.length !== 1) process.exit(1);
+if (!select.options[0].textContent.endsWith(" (current)")) process.exit(1);
+syncUploadGradeOption(select, "Grade 6");
+if (select.value !== "Grade 6") process.exit(1);
+if (select.options.length !== 0) process.exit(1);
+syncUploadGradeOption(select, "Grades 4-6 mixed");
+syncUploadGradeOption(select, "Grade 3");
+if (select.value !== "Grade 3" || select.options.length !== 0) process.exit(1);
+syncUploadGradeOption(select, "Legacy band");
+syncUploadGradeOption(select, "");
+if (select.value !== "" || select.options.length !== 0) process.exit(1);
+syncUploadGradeOption(select, "First legacy");
+syncUploadGradeOption(select, "Second legacy");
+if (select.options.length !== 1) process.exit(1);
+if (select.options[0].value !== "Second legacy") process.exit(1);
+if (!select.options[0].textContent.endsWith(" (current)")) process.exit(1);
+"""
+    )
+    grade_result = subprocess.run(
+        ["node", "-e", grade_script],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert grade_result.returncode == 0, grade_result.stderr or grade_result.stdout
 
 
 @pytest.mark.unit
@@ -1305,6 +1396,159 @@ def test_ascii_id_collision_names_the_stored_topic(
     assert rows[0]["topic"] == stored_topic
     assert rows[0]["grade_level"] == "Grade 7"
     assert rows[0]["summary"] == "legacy"
+
+
+@pytest.mark.unit
+def test_replace_keeps_free_text_grade_unless_the_request_sends_one(
+    dynamodb_table, admin_headers, monkeypatch
+):
+    _s3_env(monkeypatch)
+    legacy = "Grades 4-6 mixed"
+    created = _post(
+        "/science/topics",
+        admin_headers,
+        {
+            "category": "Science",
+            "topic": "Ferns",
+            "grade_level": "Grade 4",
+            "summary": "Shade",
+        },
+    )
+    assert created["statusCode"] == 201, created["body"]
+    subject_id = json.loads(created["body"])["subject_id"]
+    db.update_item(
+        keys.subject_pk(subject_id),
+        keys.subject_meta_sk(),
+        {"grade_level": legacy},
+    )
+
+    kept = _post(
+        "/science/topics",
+        admin_headers,
+        {"category": "Science", "topic": "Ferns", "replace": True, "summary": "Shade"},
+    )
+    assert kept["statusCode"] == 201, kept["body"]
+    assert json.loads(kept["body"])["grade_level"] == legacy
+
+    bad = _post(
+        "/science/topics",
+        admin_headers,
+        {
+            "category": "Science",
+            "topic": "Ferns",
+            "replace": True,
+            "grade_level": legacy,
+        },
+    )
+    assert bad["statusCode"] == 400, bad["body"]
+    assert "Kindergarten" in _error(bad)
+    stored = db.get_item(keys.subject_pk(subject_id), keys.subject_meta_sk())
+    assert stored["grade_level"] == legacy
+
+    pages = [
+        {
+            "index": 0,
+            "title": "Intro",
+            "text": "Hello",
+            "image_ext": "jpg",
+            "image_content_type": "image/jpeg",
+        }
+    ]
+    tech = _post(
+        "/technology/topics",
+        admin_headers,
+        {"topic": "Robots", "grade_level": "Grade 6", "pages": pages},
+    )
+    assert tech["statusCode"] == 201, tech["body"]
+    tech_id = json.loads(tech["body"])["subject_id"]
+    db.update_item(
+        keys.subject_pk(tech_id),
+        keys.subject_meta_sk(),
+        {"grade_level": legacy},
+    )
+    tech_kept = _post(
+        "/technology/topics",
+        admin_headers,
+        {"topic": "Robots", "replace": True, "pages": pages},
+    )
+    assert tech_kept["statusCode"] == 201, tech_kept["body"]
+    assert json.loads(tech_kept["body"])["grade_level"] == legacy
+    tech_bad = _post(
+        "/technology/topics",
+        admin_headers,
+        {
+            "topic": "Robots",
+            "replace": True,
+            "grade_level": "Not a grade",
+            "pages": pages,
+        },
+    )
+    assert tech_bad["statusCode"] == 400, tech_bad["body"]
+    assert db.get_item(keys.subject_pk(tech_id), keys.subject_meta_sk())["grade_level"] == legacy
+
+    put_kept = handler(
+        make_event(
+            "PUT",
+            f"/subjects/{subject_id}",
+            headers=admin_headers,
+            body=json.dumps({"description": "Still shade"}),
+        )
+    )
+    assert put_kept["statusCode"] == 200, put_kept["body"]
+    assert json.loads(put_kept["body"])["grade_level"] == legacy
+    put_bad = handler(
+        make_event(
+            "PUT",
+            f"/subjects/{subject_id}",
+            headers=admin_headers,
+            body=json.dumps({"grade_level": legacy}),
+        )
+    )
+    assert put_bad["statusCode"] == 400, put_bad["body"]
+    assert db.get_item(keys.subject_pk(subject_id), keys.subject_meta_sk())["grade_level"] == legacy
+
+
+@pytest.mark.unit
+def test_conflict_message_drops_bom_and_caps_the_stored_name(
+    dynamodb_table, admin_headers, monkeypatch
+):
+    _s3_env(monkeypatch)
+    subject_service.create_subject(
+        SubjectCreate(
+            subject_id="science-plain",
+            category="Science",
+            topic="Plain",
+            description="legacy",
+            grade_level="Grade 1",
+        )
+    )
+    messy = "\ufeff" + ("N" * 120) + "\n\x00"
+    db.update_item(
+        keys.subject_pk("science-plain"),
+        keys.subject_meta_sk(),
+        {
+            "topic": messy,
+            "name": messy,
+            "content_kind": "lesson",
+            "science_ready": True,
+            "summary": "keep",
+        },
+    )
+    refused = _post(
+        "/science/topics",
+        admin_headers,
+        {"category": "Science", "topic": "Plain", "replace": True},
+    )
+    assert refused["statusCode"] == 409, refused["body"]
+    message = _error(refused)
+    assert "\ufeff" not in message
+    assert "\n" not in message
+    assert "\x00" not in message
+    assert "N" * 100 in message
+    assert "N" * 101 not in message
+    kept = db.get_item(keys.subject_pk("science-plain"), keys.subject_meta_sk())
+    assert kept["topic"] == messy
+    assert kept["summary"] == "keep"
 
 
 @pytest.mark.unit

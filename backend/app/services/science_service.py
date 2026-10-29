@@ -30,6 +30,7 @@ from app.validation import (
     SubjectCreate,
     SubjectUpdate,
     ScienceTopicCreate,
+    canonical_grade_or_keep,
     remove_bom,
 )
 
@@ -132,22 +133,24 @@ def start_topic_upload(data: ScienceTopicCreate, *, admin_user_id: str) -> dict[
     summary = _kept_text(data.summary, existing, "summary")
     video = _kept_text(data.explainer_video_url, existing, "explainer_video_url")
     facebook = _kept_text(data.facebook_video_url, existing, "facebook_video_url")
-    grade_level = _kept_text(data.grade_level, existing, "grade_level")
+    # None keeps the stored grade, including a legacy free-text value. An explicit
+    # non-standard grade raises here, before anything is written.
+    sent_grade = canonical_grade_or_keep(data.grade_level)
+    grade_level = _kept_text(sent_grade, existing, "grade_level")
     if existing and data.summary is None:
         desc = str(existing.get("description") or "")
     else:
         desc = summary[:MAX_DESC_LEN]
 
     if existing:
-        update_subject(
-            subject_id,
-            SubjectUpdate(
-                category=category,
-                topic=topic,
-                description=desc,
-                grade_level=grade_level,
-            ),
-        )
+        fields: dict[str, Any] = {
+            "category": category,
+            "topic": topic,
+            "description": desc,
+        }
+        if sent_grade is not None:
+            fields["grade_level"] = sent_grade
+        update_subject(subject_id, SubjectUpdate(**fields))
     else:
         create_subject(
             SubjectCreate(

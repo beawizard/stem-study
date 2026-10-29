@@ -121,6 +121,19 @@ def normalize_content_grade(value: str | None) -> str | None:
     )
 
 
+def canonical_grade_or_keep(value: str | None) -> str | None:
+    """None means the caller did not send a grade. '' clears. Anything else must be standard.
+
+    A stored legacy grade is not passed through here. Only an explicit payload value is.
+    """
+    if value is None:
+        return None
+    text = str(value).strip()
+    if not text:
+        return ""
+    return normalize_content_grade(text)
+
+
 class ProfileUpdate(BaseModel):
     """PATCH /me — learner display name, school, grade (all optional; at least one)."""
 
@@ -442,12 +455,11 @@ class SubjectUpdate(PlaylistMembership):
     @field_validator("grade_level")
     @classmethod
     def validate_grade_level(cls, v: str | None) -> str | None:
-        # Allow explicit clear with empty string → stored as ""
+        # Strip only. update_subject rejects a non-standard grade that was sent.
+        # A stored legacy grade is not copied into this model on replace.
         if v is None:
             return None
-        if str(v).strip() == "":
-            return ""
-        return normalize_content_grade(v)
+        return str(v).strip()
 
 
 class TechnologyPageSpec(BaseModel):
@@ -495,11 +507,11 @@ class ScienceTopicCreate(PlaylistMembership):
     @classmethod
     def validate_grade_level(cls, v: str | None) -> str | None:
         # None (omitted or null) means keep. Explicit "" clears.
+        # Standard-grade checks run in the upload service, after this parse,
+        # so a merged legacy grade is not rejected here.
         if v is None:
             return None
-        if str(v).strip() == "":
-            return ""
-        return normalize_content_grade(v)
+        return str(v).strip()
 
     @field_validator("explainer_video_url")
     @classmethod
@@ -530,11 +542,10 @@ class TechnologyTopicCreate(BaseModel):
     @field_validator("grade_level")
     @classmethod
     def validate_grade_level(cls, v: str | None) -> str | None:
+        # None means keep. Explicit "" clears. The upload service checks the rest.
         if v is None:
             return None
-        if str(v).strip() == "":
-            return ""
-        return normalize_content_grade(v)
+        return str(v).strip()
 
 
 class LevelCreate(BaseModel):

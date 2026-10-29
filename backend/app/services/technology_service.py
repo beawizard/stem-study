@@ -22,7 +22,12 @@ from app.services.subject_service import (
     update_subject,
     _public_subject,
 )
-from app.validation import SubjectCreate, SubjectUpdate, TechnologyTopicCreate
+from app.validation import (
+    SubjectCreate,
+    SubjectUpdate,
+    TechnologyTopicCreate,
+    canonical_grade_or_keep,
+)
 
 ALLOWED_IMAGE_EXT = {"jpg", "jpeg", "png", "webp", "gif"}
 ALLOWED_AUDIO_EXT = {"mp3", "m4a", "aac", "wav", "ogg"}
@@ -90,21 +95,21 @@ def start_topic_upload(data: TechnologyTopicCreate, *, admin_user_id: str) -> di
         reject_replace_if_name_differs(existing, submitted)
     topic = display_topic_name(existing if live else None, submitted)
 
-    if existing and data.grade_level is None:
+    sent_grade = canonical_grade_or_keep(data.grade_level)
+    if existing and sent_grade is None:
         grade_level = str(existing.get("grade_level") or "")
     else:
-        grade_level = data.grade_level or ""
+        grade_level = sent_grade or ""
 
     if existing:
-        update_subject(
-            subject_id,
-            SubjectUpdate(
-                category="Technology",
-                topic=topic,
-                description=data.description or existing.get("description") or "",
-                grade_level=grade_level,
-            ),
-        )
+        fields: dict[str, Any] = {
+            "category": "Technology",
+            "topic": topic,
+            "description": data.description or existing.get("description") or "",
+        }
+        if sent_grade is not None:
+            fields["grade_level"] = sent_grade
+        update_subject(subject_id, SubjectUpdate(**fields))
     else:
         create_subject(
             SubjectCreate(

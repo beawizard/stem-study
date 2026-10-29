@@ -34,6 +34,7 @@ from app.validation import (
     LevelCreate,
     STEM_CATEGORIES,
     SubjectCreate,
+    canonical_grade_or_keep,
     ensure_subject_id,
     parse_csv_questions,
     remove_bom,
@@ -182,7 +183,8 @@ def _quiz_name_message(item: dict[str, Any], *, by_id: bool = False) -> str:
 
 def _stored_topic_message(existing: dict[str, Any]) -> str:
     """Id collision with a different name. Same shape as the quiz-name message."""
-    stored = str(existing.get("topic") or existing.get("name") or "").strip() or "this name"
+    stored = remove_bom(str(existing.get("topic") or existing.get("name") or "")).strip()
+    stored = re.sub(r"[\x00-\x1f\x7f]", "", stored)[:100].strip() or "this name"
     return f"A topic already uses this name ('{stored}'). Rename this topic."
 
 
@@ -377,8 +379,9 @@ def update_subject(subject_id: str, data) -> dict[str, Any]:
         updates["sort_order"] = order
         updates["GSI1SK"] = f"{order:05d}#{subject_id}"
     if "grade_level" in payload and payload["grade_level"] is not None:
-        # Empty string clears the tag
-        updates["grade_level"] = str(payload["grade_level"] or "").strip()
+        # Empty string clears. A value the request actually sent must be standard.
+        # Omitted grade never reaches here, so a stored legacy grade is left alone.
+        updates["grade_level"] = canonical_grade_or_keep(payload["grade_level"]) or ""
     category_now = updates.get("category") or existing.get("category") or ""
     if str(category_now) == "Mathematics":
         touched = [
