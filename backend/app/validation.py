@@ -31,6 +31,11 @@ SUBJECT_ID_PATTERN = re.compile(
 _LEVEL_NUM_NAME = re.compile(r"^(?:level|set|lvl)[\s._-]+(\d+)$", re.IGNORECASE)
 
 
+def remove_bom(value: str | None) -> str:
+    """Remove U+FEFF anywhere. str.strip() keeps it; it is not whitespace."""
+    return str(value or "").replace("\ufeff", "")
+
+
 def ensure_subject_id(value: Any, *, allow_blank: bool = False) -> str | None:
     """Accept a topic id, or raise a message that names the field and the limit."""
     if value is None:
@@ -409,8 +414,8 @@ class SubjectCreate(PlaylistMembership):
         return self
 
     def resolved_topic(self) -> str:
-        """Topic from explicit topic or legacy name field."""
-        return (self.topic or self.name or "").strip()
+        """Topic from explicit topic or legacy name field, without a byte-order mark."""
+        return remove_bom(self.topic or self.name or "").strip()
 
 
 class SubjectUpdate(PlaylistMembership):

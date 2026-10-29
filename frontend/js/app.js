@@ -1044,6 +1044,11 @@ const App = (() => {
     );
   }
 
+  /** Grade to show when a stored topic is opened. Empty or missing stays blank. */
+  function gradeLevelForUpload(stored) {
+    return String(stored || "").trim();
+  }
+
   /** Fixed grade levels for Sign up and Profile comboboxes (order fixed). */
   const GRADE_LEVELS = [
     "Kindergarten",
@@ -7793,8 +7798,9 @@ const App = (() => {
       const summaryEl = document.getElementById(sciFieldIds.summary);
       const videoEl = document.getElementById(sciFieldIds.video);
       const facebookEl = document.getElementById(sciFieldIds.facebook);
-      if (gradeEl && !sciTouched.grade && found.grade_level) {
-        gradeEl.value = found.grade_level;
+      if (gradeEl && !sciTouched.grade) {
+        // Grade 3 is only the new-topic default. A stored empty grade stays blank.
+        gradeEl.value = gradeLevelForUpload(found.grade_level);
       }
       if (summaryEl && !sciTouched.summary) {
         summaryEl.value = found.summary || found.description || "";
@@ -8018,8 +8024,8 @@ const App = (() => {
     const fillTechGrade = (topicName) => {
       if (techTouched.grade) return;
       const found = findUploadedTopic("Technology", topicName);
-      if (techGradeEl && found && found.grade_level) {
-        techGradeEl.value = found.grade_level;
+      if (techGradeEl && found) {
+        techGradeEl.value = gradeLevelForUpload(found.grade_level);
       }
     };
     if (techTopicSelect && techTopicName) {

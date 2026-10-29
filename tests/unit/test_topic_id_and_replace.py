@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import json
 import re
+import subprocess
+from pathlib import Path
 
 import boto3
 import pytest
@@ -896,6 +898,274 @@ def test_legacy_duplicate_can_be_saved_but_a_new_dup_cannot(dynamodb_table, admi
     assert "already exists" in _error(taken)
     other = next(row for row in _subjects(admin_headers) if row["subject_id"] == "science-other")
     assert other["topic"] == "Other"
+
+
+@pytest.mark.unit
+def test_ascii_ids_stay_put_when_non_latin_letters_are_hashed():
+    assert slugify_subject_id("Engineering", "QA-TESTER") == "engineering-qa-tester"
+    assert slugify_subject_id("Science", "Photosynthesis") == "science-photosynthesis"
+    assert slugify_subject_id("Science", "Éclairs ñandú") == "science-eclairs-nandu"
+    assert slugify_subject_id("Science", "Straße") == "science-strasse"
+    assert slugify_subject_id("Science", "C++") == "science-c"
+    assert slugify_subject_id("Science", "Hello, World!") == "science-hello-world"
+    assert slugify_subject_id("Mathematics", "3D shapes") == "mathematics-3d-shapes"
+    assert slugify_subject_id("Science", "it's") == "science-it-s"
+    assert slugify_subject_id("Science", "well_known") == "science-well_known"
+    # An empty Latin slug already hashed the normalized name. That id stays.
+    assert slugify_subject_id("Science", "光合作用") == "science-3cfb401"
+    # Punctuation is not a dropped letter, so this stays the ASCII slug.
+    assert slugify_subject_id("Science", "¿Qué?") == "science-que"
+    assert slugify_subject_id("Science", "Que") == "science-que"
+
+    road = "QA-TESTER Οδός"
+    word = "QA-TESTER Λόγος"
+    road_id = slugify_subject_id("Engineering", road)
+    word_id = slugify_subject_id("Engineering", word)
+    assert road_id != word_id
+    assert road_id != "engineering-qa-tester"
+    assert word_id != "engineering-qa-tester"
+    assert re.fullmatch(r"engineering-qa-tester-[0-9a-f]{7}", road_id)
+    assert re.fullmatch(r"engineering-qa-tester-[0-9a-f]{7}", word_id)
+    assert len(road_id) <= MAX_SUBJECT_ID_LEN
+    assert len(word_id) <= MAX_SUBJECT_ID_LEN
+
+    long_one = "a" * 80 + " Οδός"
+    long_two = "a" * 80 + " Λόγος"
+    one_id = slugify_subject_id("Science", long_one)
+    two_id = slugify_subject_id("Science", long_two)
+    assert one_id != two_id
+    assert len(one_id) == MAX_SUBJECT_ID_LEN
+    assert len(two_id) == MAX_SUBJECT_ID_LEN
+    assert SUBJECT_ID_PATTERN.match(one_id)
+    assert SUBJECT_ID_PATTERN.match(two_id)
+    assert not one_id.endswith("-") and not two_id.endswith("-")
+    # Already over 63 characters, so the hash was already there. It must not change.
+    assert one_id == "science-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-9185f04"
+
+
+@pytest.mark.unit
+def test_greek_names_with_the_same_latin_prefix_both_create(
+    dynamodb_table, admin_headers, monkeypatch
+):
+    _s3_env(monkeypatch)
+    road = "QA-TESTER Οδός"
+    word = "QA-TESTER Λόγος"
+    road_id = slugify_subject_id("Engineering", road)
+    word_id = slugify_subject_id("Engineering", word)
+    assert road_id != word_id
+
+    one = _post(
+        "/science/topics",
+        admin_headers,
+        {
+            "category": "Engineering",
+            "topic": road,
+            "grade_level": "Grade 4",
+            "summary": "Road",
+        },
+    )
+    two = _post(
+        "/science/topics",
+        admin_headers,
+        {
+            "category": "Engineering",
+            "topic": word,
+            "grade_level": "Grade 5",
+            "summary": "Word",
+        },
+    )
+    assert one["statusCode"] == 201, one["body"]
+    assert two["statusCode"] == 201, two["body"]
+    assert json.loads(one["body"])["subject_id"] == road_id
+    assert json.loads(two["body"])["subject_id"] == word_id
+
+    plain = _post(
+        "/subjects",
+        admin_headers,
+        {"category": "Engineering", "topic": "QA-TESTER"},
+    )
+    assert plain["statusCode"] == 201, plain["body"]
+    assert json.loads(plain["body"])["subject_id"] == "engineering-qa-tester"
+
+
+@pytest.mark.unit
+def test_legacy_mixed_script_id_is_reused(dynamodb_table, admin_headers, monkeypatch):
+    _s3_env(monkeypatch)
+    topic = "QA-TESTER Οδός"
+    legacy_id = "engineering-qa-tester"
+    assert slugify_subject_id("Engineering", topic) != legacy_id
+    subject_service.create_subject(
+        SubjectCreate(
+            subject_id=legacy_id,
+            category="Engineering",
+            topic=topic,
+            description="legacy",
+            grade_level="Grade 7",
+            sort_order=1,
+        )
+    )
+    db.update_item(
+        keys.subject_pk(legacy_id),
+        keys.subject_meta_sk(),
+        {"summary": "legacy", "content_kind": "lesson", "science_ready": True},
+    )
+
+    replaced = _post(
+        "/science/topics",
+        admin_headers,
+        {"category": "Engineering", "topic": topic, "replace": True},
+    )
+    assert replaced["statusCode"] == 201, replaced["body"]
+    body = json.loads(replaced["body"])
+    assert body["subject_id"] == legacy_id
+    assert body["grade_level"] == "Grade 7"
+    assert body["summary"] == "legacy"
+    assert body["topic"] == topic
+
+    duplicate = _post(
+        "/subjects",
+        admin_headers,
+        {"category": "Engineering", "topic": topic},
+    )
+    assert duplicate["statusCode"] == 400, duplicate["body"]
+    assert f"Subject '{legacy_id}' already exists" in _error(duplicate)
+    rows = [
+        row
+        for row in _subjects(admin_headers)
+        if normalize_topic_name(row["topic"]) == normalize_topic_name(topic)
+    ]
+    assert [row["subject_id"] for row in rows] == [legacy_id]
+
+
+@pytest.mark.unit
+def test_put_subject_strips_bom_anywhere(dynamodb_table, admin_headers, monkeypatch):
+    _s3_env(monkeypatch)
+    created = _post(
+        "/subjects",
+        admin_headers,
+        {"category": "Science", "topic": "Topic", "description": "plain"},
+    )
+    assert created["statusCode"] == 201, created["body"]
+    subject_id = json.loads(created["body"])["subject_id"]
+
+    updated = handler(
+        make_event(
+            "PUT",
+            f"/subjects/{subject_id}",
+            headers=admin_headers,
+            body=json.dumps({"topic": "Topic\ufeff"}),
+        )
+    )
+    assert updated["statusCode"] == 200, updated["body"]
+    body = json.loads(updated["body"])
+    assert body["topic"] == "Topic"
+    assert body["name"] == "Topic"
+    stored = db.get_item(keys.subject_pk(subject_id), keys.subject_meta_sk())
+    assert stored["topic"] == "Topic"
+    assert stored["name"] == "Topic"
+    assert "\ufeff" not in stored["topic"]
+
+    middle = handler(
+        make_event(
+            "PUT",
+            f"/subjects/{subject_id}",
+            headers=admin_headers,
+            body=json.dumps({"topic": "To\ufeffpic"}),
+        )
+    )
+    assert middle["statusCode"] == 200, middle["body"]
+    assert json.loads(middle["body"])["topic"] == "Topic"
+    stored = db.get_item(keys.subject_pk(subject_id), keys.subject_meta_sk())
+    assert stored["topic"] == "Topic"
+    assert stored["name"] == "Topic"
+    assert "\ufeff" not in stored["topic"]
+
+    created_bom = _post(
+        "/subjects",
+        admin_headers,
+        {"category": "Science", "topic": "Moss\ufeff", "description": "damp"},
+    )
+    assert created_bom["statusCode"] == 201, created_bom["body"]
+    moss = json.loads(created_bom["body"])
+    assert moss["topic"] == "Moss"
+    moss_row = db.get_item(keys.subject_pk(moss["subject_id"]), keys.subject_meta_sk())
+    assert moss_row["topic"] == "Moss"
+    assert "\ufeff" not in moss_row["topic"]
+    assert "\ufeff" not in moss_row["name"]
+
+    uploaded = _post(
+        "/science/topics",
+        admin_headers,
+        {"category": "Science", "topic": "Fern\ufeff", "summary": "Shade"},
+    )
+    assert uploaded["statusCode"] == 201, uploaded["body"]
+    fern = json.loads(uploaded["body"])
+    assert fern["topic"] == "Fern"
+    assert "\ufeff" not in fern["topic"]
+    fern_row = db.get_item(keys.subject_pk(fern["subject_id"]), keys.subject_meta_sk())
+    assert fern_row["topic"] == "Fern"
+    assert "\ufeff" not in fern_row["name"]
+
+
+@pytest.mark.unit
+def test_upload_form_shows_blank_grade_when_stored_grade_is_empty():
+    src_path = Path(__file__).resolve().parents[2] / "frontend" / "js" / "app.js"
+    src = src_path.read_text(encoding="utf-8")
+    start = src.index("const fillScienceFromTopic")
+    fill = src[start : src.index("const resetUntouchedScienceFields")]
+    assert "gradeLevelForUpload(found.grade_level)" in fill
+    assert "&& found.grade_level" not in fill
+    tech = src[src.index("const fillTechGrade") : src.index("if (techTopicSelect")]
+    assert "gradeLevelForUpload(found.grade_level)" in tech
+    assert "&& found.grade_level" not in tech
+    # A brand-new topic still starts at Grade 3. Science and Technology each have one.
+    assert src.count('gradeSelectOptionsHtml("Grade 3")') == 2
+
+    match = re.search(
+        r"function gradeLevelForUpload\(stored\) \{\n(?P<body>.*?)\n  \}",
+        src,
+        re.S,
+    )
+    assert match, "gradeLevelForUpload missing"
+    script = (
+        "const gradeLevelForUpload = new Function('stored', "
+        + json.dumps(match.group("body"))
+        + ");\n"
+        + r"""
+const cases = [
+  [null, ""],
+  [undefined, ""],
+  ["", ""],
+  ["   ", ""],
+  ["Grade 6", "Grade 6"],
+  ["Grade 3", "Grade 3"],
+];
+for (const [input, expected] of cases) {
+  const got = gradeLevelForUpload(input);
+  if (got !== expected) {
+    console.error(JSON.stringify({ input, expected, got }));
+    process.exit(1);
+  }
+}
+const gradeEl = { value: "Grade 3" };
+const found = { grade_level: null };
+gradeEl.value = gradeLevelForUpload(found.grade_level);
+if (gradeEl.value !== "") {
+  console.error("empty grade still shows " + JSON.stringify(gradeEl.value));
+  process.exit(1);
+}
+const missing = { value: "Grade 3" };
+missing.value = gradeLevelForUpload(undefined);
+if (missing.value !== "") process.exit(1);
+"""
+    )
+    result = subprocess.run(
+        ["node", "-e", script],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 0, result.stderr or result.stdout
 
 
 @pytest.mark.unit

@@ -36,6 +36,7 @@ from app.validation import (
     SubjectCreate,
     ensure_subject_id,
     parse_csv_questions,
+    remove_bom,
 )
 
 
@@ -97,6 +98,19 @@ def _slug_piece(text: str) -> str:
     return re.sub(r"-{2,}", "-", slug).strip("-_")
 
 
+def _slug_drops_characters(normalized: str) -> bool:
+    """True when slugify drops a non-ASCII character other than space or punctuation.
+
+    Accents are already folded away. ASCII symbols such as "+" stay on the old
+    path so existing ids do not change. The browser does not build subject ids.
+    """
+    for ch in normalized:
+        if ord(ch) < 128 or ch.isspace() or unicodedata.category(ch).startswith("P"):
+            continue
+        return True
+    return False
+
+
 def _hashed_subject_id(prefix: str, normalized: str) -> str:
     digest = hashlib.sha256(normalized.encode("utf-8")).hexdigest()[:_ID_HASH_LEN]
     stem = (prefix or "").strip("-_")[:_ID_PREFIX_MAX].strip("-_")
@@ -111,8 +125,10 @@ def _hashed_subject_id(prefix: str, normalized: str) -> str:
 def slugify_subject_id(category: str, topic: str) -> str:
     """Build a subject_id from category + topic, within MAX_SUBJECT_ID_LEN.
 
-    A slug that fits is used as-is. Truncation and empty fallbacks append a
-    7-char hash of the full normalized name so different names do not collide.
+    A slug that fits is used as-is. A 7-char hash of the normalized name is
+    appended when the slug is truncated, when it is empty, or when slugify
+    drops a non-ASCII character other than whitespace or punctuation. Pure
+    ASCII names keep their existing ids.
     """
     normalized = normalize_topic_name(f"{category}-{topic}")
     category_slug = _slug_piece(category)
@@ -122,7 +138,8 @@ def slugify_subject_id(category: str, topic: str) -> str:
     if not topic_slug:
         return _hashed_subject_id(category_slug, normalized)
     full = f"{category_slug}-{topic_slug}"
-    if len(full) <= MAX_SUBJECT_ID_LEN and re.match(r"^[a-z]", full):
+    fits = len(full) <= MAX_SUBJECT_ID_LEN and re.match(r"^[a-z]", full)
+    if fits and not _slug_drops_characters(normalized):
         subject_id = ensure_subject_id(full)
         return subject_id or _hashed_subject_id(category_slug, normalized)
     return _hashed_subject_id(full, normalized)
@@ -315,7 +332,7 @@ def update_subject(subject_id: str, data) -> dict[str, Any]:
         updates["category"] = payload["category"]
         tags_changed = True
     if "topic" in payload and payload["topic"] is not None:
-        topic = str(payload["topic"]).strip()
+        topic = remove_bom(str(payload["topic"])).strip()
         if not topic:
             raise ValueError("topic cannot be empty")
         updates["topic"] = topic
