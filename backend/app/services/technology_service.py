@@ -102,11 +102,14 @@ def start_topic_upload(data: TechnologyTopicCreate, *, admin_user_id: str) -> di
         grade_level = sent_grade or ""
 
     if existing:
-        fields: dict[str, Any] = {
-            "category": "Technology",
-            "topic": topic,
-            "description": data.description or existing.get("description") or "",
-        }
+        fields: dict[str, Any] = {"category": "Technology"}
+        # A live replace keeps the stored name. A blank description means the
+        # request did not choose a new one, so a long stored description stays.
+        if not live:
+            fields["topic"] = topic
+            fields["description"] = data.description or ""
+        elif (data.description or "").strip():
+            fields["description"] = data.description
         if sent_grade is not None:
             fields["grade_level"] = sent_grade
         update_subject(subject_id, SubjectUpdate(**fields))

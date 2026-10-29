@@ -143,11 +143,14 @@ def start_topic_upload(data: ScienceTopicCreate, *, admin_user_id: str) -> dict[
         desc = summary[:MAX_DESC_LEN]
 
     if existing:
-        fields: dict[str, Any] = {
-            "category": category,
-            "topic": topic,
-            "description": desc,
-        }
+        fields: dict[str, Any] = {"category": category}
+        # A live replace keeps the stored spelling and, when summary was omitted,
+        # the stored description. Those legacy values are not revalidated.
+        if not live:
+            fields["topic"] = topic
+            fields["description"] = desc
+        elif data.summary is not None:
+            fields["description"] = desc
         if sent_grade is not None:
             fields["grade_level"] = sent_grade
         update_subject(subject_id, SubjectUpdate(**fields))

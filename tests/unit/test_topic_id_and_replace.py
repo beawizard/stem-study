@@ -1271,6 +1271,67 @@ if (!select.options[0].textContent.endsWith(" (current)")) process.exit(1);
 
 
 @pytest.mark.unit
+def test_current_grade_option_is_omitted_from_the_upload_payload():
+    src_path = Path(__file__).resolve().parents[2] / "frontend" / "js" / "app.js"
+    src = src_path.read_text(encoding="utf-8")
+    assert "uploadGradePayload(" in src
+    assert src.count("uploadGradePayload(") >= 3
+    match = re.search(
+        r"function uploadGradePayload\(selectEl, touched, grade, keepSaved\) \{\n(?P<body>.*?)\n  \}",
+        src,
+        re.S,
+    )
+    assert match, "uploadGradePayload missing"
+    script = (
+        "const uploadGradePayload = new Function('selectEl', 'touched', 'grade', 'keepSaved', "
+        + json.dumps(match.group("body"))
+        + ");\n"
+        + r"""
+function selectWith(value, currentValue) {
+  return {
+    value,
+    querySelector() {
+      if (!currentValue) return null;
+      return { value: currentValue };
+    },
+  };
+}
+const legacy = "Grades 4-6 mixed";
+const current = selectWith(legacy, legacy);
+if (uploadGradePayload(current, true, legacy, true) !== undefined) {
+  console.error("current option was sent");
+  process.exit(1);
+}
+const gradeFive = selectWith("Grade 5", legacy);
+if (uploadGradePayload(gradeFive, true, "Grade 5", true) !== "Grade 5") {
+  console.error("Grade 5 was not sent");
+  process.exit(1);
+}
+const untouched = selectWith("Grade 5", null);
+if (uploadGradePayload(untouched, false, "Grade 5", true) !== undefined) {
+  console.error("untouched replace sent a grade");
+  process.exit(1);
+}
+if (uploadGradePayload(untouched, false, "Grade 3", false) !== "Grade 3") {
+  console.error("new topic did not keep Grade 3");
+  process.exit(1);
+}
+if (uploadGradePayload(selectWith("", null), true, "", true) !== "") {
+  console.error("explicit clear was omitted");
+  process.exit(1);
+}
+"""
+    )
+    result = subprocess.run(
+        ["node", "-e", script],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 0, result.stderr or result.stdout
+
+
+@pytest.mark.unit
 def test_science_replace_strips_a_leading_bom(
     dynamodb_table, admin_headers, monkeypatch
 ):
@@ -1549,6 +1610,110 @@ def test_conflict_message_drops_bom_and_caps_the_stored_name(
     kept = db.get_item(keys.subject_pk("science-plain"), keys.subject_meta_sk())
     assert kept["topic"] == messy
     assert kept["summary"] == "keep"
+
+
+@pytest.mark.unit
+def test_replace_keeps_overlong_stored_description_and_name(
+    dynamodb_table, admin_headers, monkeypatch
+):
+    _s3_env(monkeypatch)
+    created = _post(
+        "/science/topics",
+        admin_headers,
+        {
+            "category": "Science",
+            "topic": "Ferns",
+            "grade_level": "Grade 4",
+            "summary": "Shade",
+        },
+    )
+    assert created["statusCode"] == 201, created["body"]
+    subject_id = json.loads(created["body"])["subject_id"]
+    long_name = "Ferns" + (" " * 150)
+    long_desc = "D" * 2500
+    assert len(long_name) > 100
+    assert len(long_desc) > 2000
+    db.update_item(
+        keys.subject_pk(subject_id),
+        keys.subject_meta_sk(),
+        {"topic": long_name, "name": long_name, "description": long_desc},
+    )
+
+    kept = _post(
+        "/science/topics",
+        admin_headers,
+        {"category": "Science", "topic": "Ferns", "replace": True},
+    )
+    assert kept["statusCode"] == 201, kept["body"]
+    stored = db.get_item(keys.subject_pk(subject_id), keys.subject_meta_sk())
+    assert stored["topic"] == long_name
+    assert stored["name"] == long_name
+    assert stored["description"] == long_desc
+    assert json.loads(kept["body"])["summary"] == "Shade"
+
+    pages = [
+        {
+            "index": 0,
+            "title": "Intro",
+            "text": "Hello",
+            "image_ext": "jpg",
+            "image_content_type": "image/jpeg",
+        }
+    ]
+    tech = _post(
+        "/technology/topics",
+        admin_headers,
+        {"topic": "Robots", "grade_level": "Grade 6", "description": "Short", "pages": pages},
+    )
+    assert tech["statusCode"] == 201, tech["body"]
+    tech_id = json.loads(tech["body"])["subject_id"]
+    tech_name = "Robots" + (" " * 150)
+    db.update_item(
+        keys.subject_pk(tech_id),
+        keys.subject_meta_sk(),
+        {"description": long_desc, "topic": tech_name, "name": tech_name},
+    )
+    tech_kept = _post(
+        "/technology/topics",
+        admin_headers,
+        {"topic": "Robots", "replace": True, "description": "", "pages": pages},
+    )
+    assert tech_kept["statusCode"] == 201, tech_kept["body"]
+    tech_row = db.get_item(keys.subject_pk(tech_id), keys.subject_meta_sk())
+    assert tech_row["description"] == long_desc
+    assert tech_row["topic"] == tech_name
+
+    sent = _post(
+        "/technology/topics",
+        admin_headers,
+        {
+            "topic": "Robots",
+            "replace": True,
+            "description": "A shorter note",
+            "pages": pages,
+        },
+    )
+    assert sent["statusCode"] == 201, sent["body"]
+    assert (
+        db.get_item(keys.subject_pk(tech_id), keys.subject_meta_sk())["description"]
+        == "A shorter note"
+    )
+
+    too_long = _post(
+        "/technology/topics",
+        admin_headers,
+        {
+            "topic": "Robots",
+            "replace": True,
+            "description": "d" * 2001,
+            "pages": pages,
+        },
+    )
+    assert too_long["statusCode"] in (400, 422), too_long["body"]
+    assert (
+        db.get_item(keys.subject_pk(tech_id), keys.subject_meta_sk())["description"]
+        == "A shorter note"
+    )
 
 
 @pytest.mark.unit

@@ -1105,6 +1105,25 @@ const App = (() => {
     selectEl.value = value;
   }
 
+  /**
+   * Grade to send on upload. The legacy "(current)" option is the stored value,
+   * so choosing it again is the same as leaving the field untouched.
+   * undefined means omit grade_level.
+   */
+  function uploadGradePayload(selectEl, touched, grade, keepSaved) {
+    const legacy =
+      selectEl && typeof selectEl.querySelector === "function"
+        ? selectEl.querySelector("option[data-current-grade]")
+        : null;
+    if (legacy && String(selectEl.value || "") === String(legacy.value || "")) {
+      return undefined;
+    }
+    if (!keepSaved || touched) {
+      return touched ? grade : grade || null;
+    }
+    return undefined;
+  }
+
   function viewAuth() {
     return `
       <div class="card">
@@ -7988,9 +8007,14 @@ const App = (() => {
           const keepSaved = Boolean(foundTopic && replace);
           const body = { category, topic, replace, ...playlist };
           // Untouched defaults (Grade 3, empty summary) must not overwrite a topic.
-          if (!keepSaved || sciTouched.grade) {
-            body.grade_level = sciTouched.grade ? grade : grade || null;
-          }
+          // The "(current)" option is the stored free-text grade, so it is omitted too.
+          const gradePayload = uploadGradePayload(
+            document.getElementById("sci-grade-level"),
+            sciTouched.grade,
+            grade,
+            keepSaved
+          );
+          if (gradePayload !== undefined) body.grade_level = gradePayload;
           if (!keepSaved || sciTouched.summary) body.summary = summary;
           if (!keepSaved || sciTouched.video) body.explainer_video_url = video;
           if (!keepSaved || sciTouched.facebook) body.facebook_video_url = facebook;
@@ -8136,9 +8160,13 @@ const App = (() => {
             replace,
           };
           const foundTech = findUploadedTopic("Technology", topic);
-          if (!foundTech || !replace || techTouched.grade) {
-            techBody.grade_level = techTouched.grade ? grade : grade || null;
-          }
+          const techGradePayload = uploadGradePayload(
+            techGradeEl,
+            techTouched.grade,
+            grade,
+            Boolean(foundTech && replace)
+          );
+          if (techGradePayload !== undefined) techBody.grade_level = techGradePayload;
           const started = await Api.startTechnologyTopic(token(), techBody);
           const uploads = started.uploads || [];
           log(`Uploading media for ${uploads.length} page(s)…`);
