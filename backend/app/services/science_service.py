@@ -30,6 +30,7 @@ from app.validation import (
     SubjectCreate,
     SubjectUpdate,
     ScienceTopicCreate,
+    remove_bom,
 )
 
 ALLOWED_IMAGE_EXT = {"jpg", "jpeg", "png", "webp", "gif", "bmp"}
@@ -107,7 +108,7 @@ def start_topic_upload(data: ScienceTopicCreate, *, admin_user_id: str) -> dict[
     category = (data.category or "Science").strip() or "Science"
     if category not in STEM_CATEGORIES:
         raise ScienceError(f"category must be one of: {', '.join(STEM_CATEGORIES)}")
-    submitted = data.topic.strip()
+    submitted = remove_bom(data.topic).strip()
     # Technology presentations are not lesson rows. Every other category must
     # not reuse or convert a quiz subject the upload form does not list.
     subject_id, existing = resolve_topic_upload(

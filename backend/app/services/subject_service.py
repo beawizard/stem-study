@@ -101,8 +101,10 @@ def _slug_piece(text: str) -> str:
 def _slug_drops_characters(normalized: str) -> bool:
     """True when slugify drops a non-ASCII character other than space or punctuation.
 
-    Accents are already folded away. ASCII symbols such as "+" stay on the old
-    path so existing ids do not change. The browser does not build subject ids.
+    The hash also triggers on symbols, format characters such as ZWSP, and
+    digits from other scripts. Accents are already folded away. ASCII symbols
+    such as "+" stay on the old path so existing ids do not change. The
+    browser does not build subject ids.
     """
     for ch in normalized:
         if ord(ch) < 128 or ch.isspace() or unicodedata.category(ch).startswith("P"):
@@ -178,6 +180,12 @@ def _quiz_name_message(item: dict[str, Any], *, by_id: bool = False) -> str:
     return f"A quiz subject already uses this name ('{stored}'). Rename this topic."
 
 
+def _stored_topic_message(existing: dict[str, Any]) -> str:
+    """Id collision with a different name. Same shape as the quiz-name message."""
+    stored = str(existing.get("topic") or existing.get("name") or "").strip() or "this name"
+    return f"A topic already uses this name ('{stored}'). Rename this topic."
+
+
 def find_live_topics(category: str, topic: str) -> list[dict[str, Any]]:
     """Live subjects with this category and normalized name, lowest subject_id first."""
     wanted_name = normalize_topic_name(topic)
@@ -232,13 +240,12 @@ def resolve_topic_upload(
 
     subject_id = slugify_subject_id(category, topic)
     existing = db.get_item(keys.subject_pk(subject_id), keys.subject_meta_sk())
-    if (
-        lessons_only
-        and existing
-        and not existing.get("deleted_at")
-        and not is_lesson_topic(existing)
-    ):
-        raise ConflictError(_quiz_name_message(existing, by_id=True))
+    if existing and not existing.get("deleted_at"):
+        stored_name = str(existing.get("topic") or existing.get("name") or "")
+        if normalize_topic_name(stored_name) != normalize_topic_name(topic):
+            if lessons_only and not is_lesson_topic(existing):
+                raise ConflictError(_quiz_name_message(existing, by_id=True))
+            raise ReplaceNameConflict(_stored_topic_message(existing))
     return subject_id, existing
 
 
@@ -254,6 +261,12 @@ def create_subject(data: SubjectCreate) -> dict[str, Any]:
     sk = keys.subject_meta_sk()
     existing = db.get_item(pk, sk)
     if existing and not existing.get("deleted_at"):
+        stored_name = str(existing.get("topic") or existing.get("name") or "")
+        # An explicit id the caller chose still reports "already exists".
+        # A generated slug that lands on a different topic names that topic.
+        generated = not (data.subject_id or "").strip()
+        if generated and normalize_topic_name(stored_name) != normalize_topic_name(topic):
+            raise ReplaceNameConflict(_stored_topic_message(existing))
         raise ConflictError(f"Subject '{subject_id}' already exists")
 
     now = _utcnow_iso()

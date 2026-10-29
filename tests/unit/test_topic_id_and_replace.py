@@ -393,8 +393,7 @@ def test_truncated_names_and_fallbacks_do_not_collide(dynamodb_table, admin_head
     assert refused["statusCode"] == 409, refused["body"]
     message = _error(refused)
     assert "Kept Name" in message
-    assert "???" in message
-    assert "Rename this topic, or use Edit Subject to change the existing one." in message
+    assert "Rename this topic." in message
     listed = handler(make_event("GET", "/subjects", headers=admin_headers))
     rows = json.loads(listed["body"])["subjects"]
     kept = next(row for row in rows if row["subject_id"] == stolen)
@@ -1118,6 +1117,7 @@ def test_upload_form_shows_blank_grade_when_stored_grade_is_empty():
     tech = src[src.index("const fillTechGrade") : src.index("if (techTopicSelect")]
     assert "gradeLevelForUpload(found.grade_level)" in tech
     assert "&& found.grade_level" not in tech
+    assert 'techGradeEl.value = "Grade 3"' in tech
     # A brand-new topic still starts at Grade 3. Science and Technology each have one.
     assert src.count('gradeSelectOptionsHtml("Grade 3")') == 2
 
@@ -1157,6 +1157,17 @@ if (gradeEl.value !== "") {
 const missing = { value: "Grade 3" };
 missing.value = gradeLevelForUpload(undefined);
 if (missing.value !== "") process.exit(1);
+// Open a tech topic with a blank grade, then type a name that is not stored.
+let techGrade = "Grade 3";
+const blankTopic = { grade_level: null };
+techGrade = gradeLevelForUpload(blankTopic.grade_level);
+if (techGrade !== "") process.exit(1);
+const typedNewName = null;
+techGrade = typedNewName ? gradeLevelForUpload(typedNewName.grade_level) : "Grade 3";
+if (techGrade !== "Grade 3") {
+  console.error("new tech name kept " + JSON.stringify(techGrade));
+  process.exit(1);
+}
 """
     )
     result = subprocess.run(
@@ -1166,6 +1177,134 @@ if (missing.value !== "") process.exit(1);
         text=True,
     )
     assert result.returncode == 0, result.stderr or result.stdout
+
+
+@pytest.mark.unit
+def test_science_replace_strips_a_leading_bom(
+    dynamodb_table, admin_headers, monkeypatch
+):
+    _s3_env(monkeypatch)
+    created = _post(
+        "/science/topics",
+        admin_headers,
+        {
+            "category": "Science",
+            "topic": "Ferns",
+            "grade_level": "Grade 4",
+            "summary": "Shade",
+        },
+    )
+    assert created["statusCode"] == 201, created["body"]
+    created_body = json.loads(created["body"])
+    subject_id = created_body["subject_id"]
+
+    replaced = _post(
+        "/science/topics",
+        admin_headers,
+        {
+            "category": "Science",
+            "topic": "\ufeffFerns",
+            "replace": True,
+        },
+    )
+    assert replaced["statusCode"] == 201, replaced["body"]
+    body = json.loads(replaced["body"])
+    assert body["subject_id"] == subject_id
+    assert body["topic"] == "Ferns"
+    assert "\ufeff" not in body["topic"]
+    assert body["grade_level"] == "Grade 4"
+    assert body["summary"] == "Shade"
+    stored = db.get_item(keys.subject_pk(subject_id), keys.subject_meta_sk())
+    assert stored["topic"] == "Ferns"
+    assert "\ufeff" not in stored["topic"]
+    assert "\ufeff" not in stored["name"]
+
+    # The conflict text is built from the submitted name. A leading BOM must not survive it.
+    blocked = _post(
+        "/science/topics",
+        admin_headers,
+        {"category": "Science", "topic": "\ufeffFerns"},
+    )
+    assert blocked["statusCode"] == 400, blocked["body"]
+    message = _error(blocked)
+    assert "Ferns" in message
+    assert "\ufeff" not in message
+
+
+@pytest.mark.unit
+def test_ascii_id_collision_names_the_stored_topic(
+    dynamodb_table, admin_headers, monkeypatch
+):
+    _s3_env(monkeypatch)
+    legacy_id = "engineering-qa-tester"
+    stored_topic = "QA-TESTER Οδός"
+    assert slugify_subject_id("Engineering", "QA-TESTER") == legacy_id
+    assert slugify_subject_id("Engineering", stored_topic) != legacy_id
+    subject_service.create_subject(
+        SubjectCreate(
+            subject_id=legacy_id,
+            category="Engineering",
+            topic=stored_topic,
+            description="legacy",
+            grade_level="Grade 7",
+            sort_order=1,
+        )
+    )
+    db.update_item(
+        keys.subject_pk(legacy_id),
+        keys.subject_meta_sk(),
+        {"summary": "legacy", "content_kind": "lesson", "science_ready": True},
+    )
+
+    created = _post(
+        "/subjects",
+        admin_headers,
+        {"category": "Engineering", "topic": "QA-TESTER"},
+    )
+    assert created["statusCode"] == 409, created["body"]
+    created_error = _error(created)
+    assert stored_topic in created_error
+    assert "Rename this topic." in created_error
+    assert "already exists" not in created_error
+
+    replaced = _post(
+        "/science/topics",
+        admin_headers,
+        {
+            "category": "Engineering",
+            "topic": "QA-TESTER",
+            "replace": True,
+            "summary": "should not land",
+        },
+    )
+    assert replaced["statusCode"] == 409, replaced["body"]
+    replaced_error = _error(replaced)
+    assert stored_topic in replaced_error
+    assert "Rename this topic." in replaced_error
+    assert "\ufeff" not in replaced_error
+
+    bom = _post(
+        "/science/topics",
+        admin_headers,
+        {
+            "category": "Engineering",
+            "topic": "\ufeffQA-TESTER",
+            "replace": True,
+        },
+    )
+    assert bom["statusCode"] == 409, bom["body"]
+    assert stored_topic in _error(bom)
+    assert "\ufeff" not in _error(bom)
+
+    rows = [
+        row
+        for row in _subjects(admin_headers)
+        if row["subject_id"] == legacy_id or row["topic"] == "QA-TESTER"
+    ]
+    assert [row["subject_id"] for row in rows] == [legacy_id]
+    assert rows[0]["topic"] == stored_topic
+    assert rows[0]["grade_level"] == "Grade 7"
+    assert rows[0]["summary"] == "legacy"
 
 
 @pytest.mark.unit

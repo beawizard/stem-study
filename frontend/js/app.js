@@ -8026,6 +8026,9 @@ const App = (() => {
       const found = findUploadedTopic("Technology", topicName);
       if (techGradeEl && found) {
         techGradeEl.value = gradeLevelForUpload(found.grade_level);
+      } else if (techGradeEl) {
+        // A new name is not the blank topic. Grade 3 is the new-topic default.
+        techGradeEl.value = "Grade 3";
       }
     };
     if (techTopicSelect && techTopicName) {
