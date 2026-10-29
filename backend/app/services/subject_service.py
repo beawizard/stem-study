@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import hashlib
 import re
+import unicodedata
 import uuid
 from datetime import datetime, timezone
 from typing import Any
@@ -20,7 +22,21 @@ from app.vedic import (
     parse_ismc_mcq,
     parse_vedic_mcq,
 )
-from app.validation import LevelCreate, STEM_CATEGORIES, SubjectCreate, parse_csv_questions
+from app.playlists import (
+    PLAYLIST_FIELD_NAMES,
+    blank_playlist_fields,
+    playlist_fields_for_model,
+    playlist_update_from_payload,
+    public_playlist_fields,
+)
+from app.validation import (
+    MAX_SUBJECT_ID_LEN,
+    LevelCreate,
+    STEM_CATEGORIES,
+    SubjectCreate,
+    ensure_subject_id,
+    parse_csv_questions,
+)
 
 
 class SubjectNotFound(Exception):
@@ -35,25 +51,186 @@ class ConflictError(Exception):
     pass
 
 
+class ReplaceNameConflict(Exception):
+    """Replace would overwrite a topic stored under a different name."""
+
+
+# 55-char stem + hyphen + 7 hex chars = the 63-char id limit.
+_ID_HASH_LEN = 7
+_ID_PREFIX_MAX = MAX_SUBJECT_ID_LEN - _ID_HASH_LEN - 1
+
+
 def _utcnow_iso() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
+def _fold_marks(text: str) -> str:
+    """NFKD, then drop combining marks so É and ñ become e and n."""
+    decomposed = unicodedata.normalize("NFKD", text or "")
+    return "".join(ch for ch in decomposed if not unicodedata.combining(ch))
+
+
+def normalize_topic_name(text: str) -> str:
+    """Identity of a topic name: NFKD, drop combining marks, casefold, trim, collapse spaces.
+
+    frontend/js/app.js normalizeTopicName must stay in sync, including ß → ss,
+    final sigma ς → σ, a BOM anywhere in the name, and U+001C–U+001F / U+0085
+    as spaces. Cherokee case pairs are not special-cased in the browser.
+    """
+    raw = str(text or "").replace("\ufeff", "")
+    folded = _fold_marks(raw)
+    folded = re.sub(r"[\u001c-\u001f\u0085]", " ", folded)
+    return re.sub(r"\s+", " ", folded).strip().casefold()
+
+
+def is_lesson_topic(item: dict[str, Any]) -> bool:
+    """Lesson rows the science upload form edits. Technology presentations are not these."""
+    kind = (item.get("content_kind") or "").strip()
+    if kind in ("science", "lesson"):
+        return True
+    return bool(item.get("science_ready"))
+
+
+def _slug_piece(text: str) -> str:
+    folded = normalize_topic_name(text)
+    slug = re.sub(r"[^a-z0-9_-]+", "-", folded)
+    return re.sub(r"-{2,}", "-", slug).strip("-_")
+
+
+def _hashed_subject_id(prefix: str, normalized: str) -> str:
+    digest = hashlib.sha256(normalized.encode("utf-8")).hexdigest()[:_ID_HASH_LEN]
+    stem = (prefix or "").strip("-_")[:_ID_PREFIX_MAX].strip("-_")
+    if not stem or not re.match(r"^[a-z]", stem):
+        stem = "subject"
+    subject_id = ensure_subject_id(f"{stem}-{digest}")
+    if not subject_id:
+        raise ValueError(f"Topic id must be at most {MAX_SUBJECT_ID_LEN} characters")
+    return subject_id
+
+
 def slugify_subject_id(category: str, topic: str) -> str:
-    """Build a stable subject_id from category + topic (lowercase slug)."""
-    raw = f"{category}-{topic}".lower().strip()
-    s = re.sub(r"[^a-z0-9_-]+", "-", raw)
-    s = re.sub(r"-{2,}", "-", s).strip("-_")
-    if not s:
-        s = "subject"
-    if not re.match(r"^[a-z]", s):
-        s = f"s-{s}"
-    return s[:64]
+    """Build a subject_id from category + topic, within MAX_SUBJECT_ID_LEN.
+
+    A slug that fits is used as-is. Truncation and empty fallbacks append a
+    7-char hash of the full normalized name so different names do not collide.
+    """
+    normalized = normalize_topic_name(f"{category}-{topic}")
+    category_slug = _slug_piece(category)
+    if not category_slug or not re.match(r"^[a-z]", category_slug):
+        category_slug = "subject"
+    topic_slug = _slug_piece(topic)
+    if not topic_slug:
+        return _hashed_subject_id(category_slug, normalized)
+    full = f"{category_slug}-{topic_slug}"
+    if len(full) <= MAX_SUBJECT_ID_LEN and re.match(r"^[a-z]", full):
+        subject_id = ensure_subject_id(full)
+        return subject_id or _hashed_subject_id(category_slug, normalized)
+    return _hashed_subject_id(full, normalized)
+
+
+def reject_replace_if_name_differs(existing: dict[str, Any] | None, submitted_name: str) -> None:
+    """Refuse replace when this id is already stored under a different name."""
+    if not existing or existing.get("deleted_at"):
+        return
+    stored = str(existing.get("topic") or existing.get("name") or "").strip()
+    submitted = (submitted_name or "").strip()
+    if normalize_topic_name(stored) == normalize_topic_name(submitted):
+        return
+    raise ReplaceNameConflict(
+        f"A different topic already uses this id ('{stored}', not '{submitted}'). "
+        "Rename this topic, or use Edit Subject to change the existing one."
+    )
+
+
+def display_topic_name(existing: dict[str, Any] | None, submitted_name: str) -> str:
+    """Keep the stored spelling when the names match after normalization."""
+    submitted = (submitted_name or "").strip()
+    if not existing or existing.get("deleted_at"):
+        return submitted
+    stored = str(existing.get("topic") or existing.get("name") or "").strip()
+    if stored and normalize_topic_name(stored) == normalize_topic_name(submitted):
+        return stored
+    return submitted
+
+
+def _quiz_name_message(item: dict[str, Any], *, by_id: bool = False) -> str:
+    if by_id:
+        sid = str(item.get("subject_id") or "").strip() or "this id"
+        return f"A quiz subject already uses this topic id ('{sid}'). Rename this topic."
+    stored = str(item.get("topic") or item.get("name") or "this name").strip()
+    return f"A quiz subject already uses this name ('{stored}'). Rename this topic."
+
+
+def find_live_topics(category: str, topic: str) -> list[dict[str, Any]]:
+    """Live subjects with this category and normalized name, lowest subject_id first."""
+    wanted_name = normalize_topic_name(topic)
+    wanted_cat = normalize_topic_name(category)
+    if not wanted_name or not wanted_cat:
+        return []
+    matches: list[dict[str, Any]] = []
+    for item in db.query_gsi1(keys.ENTITY_SUBJECT):
+        if item.get("deleted_at") or item.get("entity_type") != "SUBJECT":
+            continue
+        if normalize_topic_name(str(item.get("category") or "")) != wanted_cat:
+            continue
+        stored = str(item.get("topic") or item.get("name") or "")
+        if normalize_topic_name(stored) == wanted_name:
+            matches.append(item)
+    matches.sort(key=lambda item: str(item.get("subject_id") or ""))
+    return matches
+
+
+def find_live_topic(category: str, topic: str) -> dict[str, Any] | None:
+    """Live subject with this category and normalized topic name, if any.
+
+    When several match, the lowest subject_id wins. Deleted rows are skipped.
+    """
+    matches = find_live_topics(category, topic)
+    return matches[0] if matches else None
+
+
+def resolve_topic_upload(
+    category: str,
+    topic: str,
+    *,
+    lessons_only: bool = False,
+) -> tuple[str, dict[str, Any] | None]:
+    """Reuse a live topic's stored id when the normalized name already exists.
+
+    Science, Engineering, and Mathematics uploads only reuse lesson rows, matching
+    the admin form. Technology is exempt. A quiz with that name or id is rejected
+    instead of being turned into a lesson.
+    """
+    matches = find_live_topics(category, topic)
+    if lessons_only:
+        lessons = [item for item in matches if is_lesson_topic(item)]
+        if lessons:
+            found = lessons[0]
+            return str(found["subject_id"]), found
+        if matches:
+            raise ConflictError(_quiz_name_message(matches[0]))
+    elif matches:
+        found = matches[0]
+        return str(found["subject_id"]), found
+
+    subject_id = slugify_subject_id(category, topic)
+    existing = db.get_item(keys.subject_pk(subject_id), keys.subject_meta_sk())
+    if (
+        lessons_only
+        and existing
+        and not existing.get("deleted_at")
+        and not is_lesson_topic(existing)
+    ):
+        raise ConflictError(_quiz_name_message(existing, by_id=True))
+    return subject_id, existing
 
 
 def create_subject(data: SubjectCreate) -> dict[str, Any]:
     topic = data.resolved_topic()
     category = data.category
+    found = find_live_topic(category, topic)
+    if found:
+        raise ConflictError(f"Subject '{found.get('subject_id')}' already exists")
     subject_id = data.subject_id or slugify_subject_id(category, topic)
 
     pk = keys.subject_pk(subject_id)
@@ -81,6 +258,7 @@ def create_subject(data: SubjectCreate) -> dict[str, Any]:
         "created_at": now,
         "updated_at": now,
         "deleted_at": "",
+        **playlist_fields_for_model(None, data),
     }
     try:
         db.put_item(item, condition="attribute_not_exists(PK)")
@@ -124,10 +302,10 @@ def update_subject(subject_id: str, data) -> dict[str, Any]:
     Questions inherit category/topic from the subject when listed (no per-row
     cascade) so Edit Subject stays fast even with large question banks.
     """
-    get_subject(subject_id)
+    existing = get_subject(subject_id)
     payload = data.model_dump(exclude_unset=True)
     if not payload:
-        return _public_subject(get_subject(subject_id))
+        return _public_subject(existing)
 
     now = _utcnow_iso()
     updates: dict[str, Any] = {"updated_at": now}
@@ -143,6 +321,25 @@ def update_subject(subject_id: str, data) -> dict[str, Any]:
         updates["topic"] = topic
         updates["name"] = topic  # keep legacy name in sync with topic
         tags_changed = True
+    else:
+        topic = str(existing.get("topic") or existing.get("name") or "").strip()
+    final_category = str(updates.get("category") or existing.get("category") or "")
+    stored_topic = str(existing.get("topic") or existing.get("name") or "")
+    stored_category = str(existing.get("category") or "")
+    name_same = normalize_topic_name(topic) == normalize_topic_name(stored_topic)
+    category_same = normalize_topic_name(final_category) == normalize_topic_name(
+        stored_category
+    )
+    topic_sent = "topic" in payload and payload["topic"] is not None
+    category_sent = "category" in payload and payload["category"] is not None
+    if (topic_sent or category_sent) and not (name_same and category_same):
+        others = [
+            item
+            for item in find_live_topics(final_category, topic)
+            if str(item.get("subject_id") or "") != str(subject_id)
+        ]
+        if others:
+            raise ConflictError(f"Subject '{others[0].get('subject_id')}' already exists")
     if "description" in payload and payload["description"] is not None:
         updates["description"] = payload["description"]
     if "sort_order" in payload and payload["sort_order"] is not None:
@@ -152,6 +349,20 @@ def update_subject(subject_id: str, data) -> dict[str, Any]:
     if "grade_level" in payload and payload["grade_level"] is not None:
         # Empty string clears the tag
         updates["grade_level"] = str(payload["grade_level"] or "").strip()
+    category_now = updates.get("category") or existing.get("category") or ""
+    if str(category_now) == "Mathematics":
+        touched = [
+            name
+            for name in PLAYLIST_FIELD_NAMES
+            if name in payload and payload[name] is not None
+        ]
+        if touched:
+            raise ValueError("Mathematics topics do not use playlists")
+        updates.update(blank_playlist_fields())
+    else:
+        playlist_updates = playlist_update_from_payload(existing, payload)
+        if playlist_updates:
+            updates.update(playlist_updates)
 
     db.update_item(
         keys.subject_pk(subject_id),
@@ -683,6 +894,7 @@ def seed_math_defaults() -> dict[str, Any]:
     """Idempotent seed: Math subject + beginner levels with sample questions."""
     from app.validation import LevelCreate, SubjectCreate
 
+    seed_id = "math"
     try:
         create_subject(
             SubjectCreate(
@@ -696,6 +908,19 @@ def seed_math_defaults() -> dict[str, Any]:
         subject_created = True
     except ConflictError:
         subject_created = False
+        found = find_live_topic("Mathematics", "Arithmetic")
+        if found and found.get("subject_id"):
+            seed_id = str(found["subject_id"])
+        else:
+            try:
+                get_subject("math")
+            except SubjectNotFound:
+                return {
+                    "subject_created": False,
+                    "levels_created": 0,
+                    "questions_imported": 0,
+                }
+            seed_id = "math"
 
     levels_spec = [
         ("l1", "Level 1 – Addition", 1, "1,+,1,=,2\n2,+,3,=,5\n4,+,5,=,9\n0,+,7,=,7\n6,+,2,=,8\n"),
@@ -707,7 +932,7 @@ def seed_math_defaults() -> dict[str, Any]:
     for lid, name, order, csv_body in levels_spec:
         try:
             create_level(
-                "math",
+                seed_id,
                 LevelCreate(
                     level_id=lid,
                     name=name,
@@ -717,13 +942,13 @@ def seed_math_defaults() -> dict[str, Any]:
                 ),
             )
             levels_created += 1
-            summary = import_questions_csv("math", lid, csv_body)
+            summary = import_questions_csv(seed_id, lid, csv_body)
             questions_imported += summary["imported"]
         except ConflictError:
             # Level exists; only import if empty
-            level = get_level("math", lid)
+            level = get_level(seed_id, lid)
             if int(level.get("question_count") or 0) == 0:
-                summary = import_questions_csv("math", lid, csv_body)
+                summary = import_questions_csv(seed_id, lid, csv_body)
                 questions_imported += summary["imported"]
 
     return {
@@ -794,6 +1019,7 @@ def _public_subject(item: dict[str, Any]) -> dict[str, Any]:
         or item.get("interactive_html_url")
         or "",
         "created_at": item.get("created_at"),
+        **public_playlist_fields(item),
     }
 
 

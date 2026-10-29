@@ -370,7 +370,7 @@ button { cursor: pointer; min-height: var(--tap); }
 .leaderboard-table tbody tr:nth-child(3) .lb-rank { color: #c2410c; }
 
 /* Home recommended-lesson carousel (sits above the leaderboard) */
-.recommend-card h2 {
+.card.recommend-card h2 {
   margin: 0;
 }
 .recommend-head {
@@ -2274,6 +2274,37 @@ body.tech-mode .topbar {
 .tech-landing-card > .study-page-title,
 .tech-landing-card > .study-pickers {
   flex: 0 0 auto;
+}
+/* Playlist rows sit above the picture book, so this page scrolls instead of locking the viewport. */
+body.tech-mode.tech-catalog {
+  height: auto;
+  min-height: var(--app-height, 100dvh);
+  overflow: auto;
+}
+body.tech-mode.tech-catalog #app {
+  height: auto;
+  display: block;
+  overflow: visible;
+}
+body.tech-mode.tech-catalog .main.tech-mode-main {
+  display: block;
+  overflow: visible;
+  height: auto;
+  flex: none;
+}
+body.tech-mode.tech-catalog .tech-landing-card {
+  display: block;
+  flex: none;
+  overflow: visible;
+  min-height: 0;
+  margin-bottom: 1rem;
+}
+body.tech-mode.tech-catalog .tech-book,
+body.tech-mode.tech-catalog .tech-page {
+  min-height: 16rem;
+}
+body.tech-mode.tech-catalog .tech-book {
+  height: 52dvh;
 }
 @media (max-height: 640px) {
   .tech-subtitle {

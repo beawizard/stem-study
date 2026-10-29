@@ -11,12 +11,16 @@ from urllib.parse import quote
 import boto3
 
 from app import db, keys
+from app.playlists import playlist_fields_for_model
 from app.services.subject_service import (
     ConflictError,
     SubjectNotFound,
     create_subject,
     get_subject,
-    slugify_subject_id,
+    reject_replace_if_name_differs,
+    display_topic_name,
+    is_lesson_topic,
+    resolve_topic_upload,
     update_subject,
     _public_subject,
 )
@@ -91,11 +95,11 @@ def _html_key(category: str, subject_id: str) -> str:
     return f"{_s3_prefix(category)}/{subject_id}/interactive.html"
 
 
-def is_lesson_topic(item: dict[str, Any]) -> bool:
-    kind = (item.get("content_kind") or "").strip()
-    if kind in ("science", "lesson"):
-        return True
-    return bool(item.get("science_ready"))
+def _kept_text(incoming: str | None, existing: dict[str, Any] | None, key: str) -> str:
+    """Use incoming text. None on replace keeps the value already stored."""
+    if existing and incoming is None:
+        return str(existing.get(key) or "")
+    return (incoming or "").strip()
 
 
 def start_topic_upload(data: ScienceTopicCreate, *, admin_user_id: str) -> dict[str, Any]:
@@ -103,20 +107,35 @@ def start_topic_upload(data: ScienceTopicCreate, *, admin_user_id: str) -> dict[
     category = (data.category or "Science").strip() or "Science"
     if category not in STEM_CATEGORIES:
         raise ScienceError(f"category must be one of: {', '.join(STEM_CATEGORIES)}")
-    topic = data.topic.strip()
-    subject_id = slugify_subject_id(category, topic)
+    submitted = data.topic.strip()
+    # Technology presentations are not lesson rows. Every other category must
+    # not reuse or convert a quiz subject the upload form does not list.
+    subject_id, existing = resolve_topic_upload(
+        category,
+        submitted,
+        lessons_only=category != "Technology",
+    )
     pk = keys.subject_pk(subject_id)
-    existing = db.get_item(pk, keys.subject_meta_sk())
     live = bool(existing and not existing.get("deleted_at"))
     if live and not data.replace:
         raise ConflictError(
-            f"Topic '{topic}' already exists. Enable replace to overwrite."
+            f"Topic '{submitted}' already exists. Enable replace to overwrite."
         )
+    if live and data.replace:
+        reject_replace_if_name_differs(existing, submitted)
+    topic = display_topic_name(existing if live else None, submitted)
 
-    summary = (data.summary or "").strip()
-    video = (data.explainer_video_url or "").strip()
-    facebook = (data.facebook_video_url or "").strip()
-    desc = summary[:MAX_DESC_LEN]
+    # Omitted or null grade, summary, and video links keep the saved values
+    # when this upload replaces a topic. A value the caller actually sent is stored.
+    # Explicit "" clears grade, summary, and description.
+    summary = _kept_text(data.summary, existing, "summary")
+    video = _kept_text(data.explainer_video_url, existing, "explainer_video_url")
+    facebook = _kept_text(data.facebook_video_url, existing, "facebook_video_url")
+    grade_level = _kept_text(data.grade_level, existing, "grade_level")
+    if existing and data.summary is None:
+        desc = str(existing.get("description") or "")
+    else:
+        desc = summary[:MAX_DESC_LEN]
 
     if existing:
         update_subject(
@@ -124,8 +143,8 @@ def start_topic_upload(data: ScienceTopicCreate, *, admin_user_id: str) -> dict[
             SubjectUpdate(
                 category=category,
                 topic=topic,
-                description=desc or existing.get("description") or "",
-                grade_level=data.grade_level,
+                description=desc,
+                grade_level=grade_level,
             ),
         )
     else:
@@ -204,9 +223,10 @@ def start_topic_upload(data: ScienceTopicCreate, *, admin_user_id: str) -> dict[
             "image_url": image_url,
             "html_key": html_key,
             "html_url": html_url,
-            "grade_level": data.grade_level or "",
+            "grade_level": grade_level,
             "uploaded_by": admin_user_id,
             "updated_at": now,
+            **playlist_fields_for_model(existing, data),
         },
     )
     pub = public_science_topic(get_subject(subject_id))

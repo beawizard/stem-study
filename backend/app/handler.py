@@ -63,6 +63,7 @@ from urllib.parse import unquote
 from app.auth import AuthError, UserContext, get_user_context, require_admin
 from app.response import (
     bad_request,
+    conflict,
     created,
     forbidden,
     no_content,
@@ -96,6 +97,7 @@ from app.services.subject_service import (
     ConflictError,
     LevelNotFound,
     QuestionNotFound,
+    ReplaceNameConflict,
     SubjectNotFound,
 )
 from app.services.task_service import TaskNotFound
@@ -479,6 +481,8 @@ def _route(
             return ok(subject_service.update_subject(subject_id, data))  # type: ignore[arg-type]
         except SubjectNotFound:
             return not_found("Subject not found")
+        except ConflictError as exc:
+            return conflict(str(exc))
         except ValueError as exc:
             return bad_request(str(exc))
 
@@ -803,6 +807,8 @@ def _route(
                     data, admin_user_id=user.user_id
                 )
             )
+        except ReplaceNameConflict as exc:
+            return conflict(str(exc))
         except ConflictError as exc:
             return bad_request(str(exc))
         except ScienceError as exc:
@@ -842,6 +848,8 @@ def _route(
                     data, admin_user_id=user.user_id
                 )
             )
+        except ReplaceNameConflict as exc:
+            return conflict(str(exc))
         except ConflictError as exc:
             return bad_request(str(exc))
         except TechnologyError as exc:

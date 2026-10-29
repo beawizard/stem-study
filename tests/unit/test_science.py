@@ -287,3 +287,73 @@ def test_science_topic_replace_without_new_image(dynamodb_table, admin_headers, 
     assert body["summary"].startswith("Updated summary")
     assert not body.get("image_put_url")
     assert "cover.png" in (body.get("image_url") or "")
+
+
+@pytest.mark.unit
+def test_science_topic_playlist_roundtrip(dynamodb_table, admin_headers, user_headers, monkeypatch):
+    _s3_env(monkeypatch)
+    created = handler(
+        make_event(
+            "POST",
+            "/science/topics",
+            headers=admin_headers,
+            body=_start_body(
+                playlist_name="Plants",
+                playlist_id="1145586957826409",
+                playlist_position=2,
+                playlist_sort=3,
+            ),
+        )
+    )
+    assert created["statusCode"] == 201, created["body"]
+    started = json.loads(created["body"])
+    assert started["playlist_name"] == "Plants"
+    assert started["playlist_position"] == 2
+    assert started["playlist_sort"] == 3
+
+    kept = handler(
+        make_event(
+            "POST",
+            "/science/topics",
+            headers=admin_headers,
+            body=_start_body(summary="Still plants.", replace=True),
+        )
+    )
+    assert kept["statusCode"] == 201, kept["body"]
+    kept_body = json.loads(kept["body"])
+    assert kept_body["playlist_id"] == "1145586957826409"
+    assert kept_body["playlist_name"] == "Plants"
+    assert kept_body["playlist_position"] == 2
+
+    cleared = handler(
+        make_event(
+            "POST",
+            "/science/topics",
+            headers=admin_headers,
+            body=_start_body(
+                playlist_id="",
+                playlist_name="",
+                replace=True,
+            ),
+        )
+    )
+    assert cleared["statusCode"] == 201, cleared["body"]
+    cleared_body = json.loads(cleared["body"])
+    assert cleared_body["playlist_name"] == ""
+    assert cleared_body["playlist_id"] == ""
+    assert cleared_body["playlist_position"] == 0
+
+    invalid = handler(
+        make_event(
+            "POST",
+            "/science/topics",
+            headers=admin_headers,
+            body=_start_body(topic="Rocks", playlist_id="playlist-one"),
+        )
+    )
+    assert invalid["statusCode"] == 422
+
+    detail = handler(
+        make_event("GET", "/science/topics/science-plants", headers=user_headers)
+    )
+    assert json.loads(detail["body"])["playlist_sort"] == 0

@@ -18,13 +18,40 @@ MAX_VIDEO_URL_LEN = 1000
 MAX_THUMB_BYTES = 400_000
 MAX_THUMB_TEXT = 560_000
 MAX_THUMB_BATCH_TEXT = 5_000_000
-MAX_SUBJECT_ID_LEN = 64
+# Topic ids: one character plus up to 62 more is 63. Slugify uses this same
+# limit so a long topic name is truncated instead of failing validation.
+MAX_SUBJECT_ID_LEN = 63
 MAX_LEVEL_ID_LEN = 64
 MAX_CSV_ROWS = 5000
 ID_PATTERN = re.compile(r"^[a-zA-Z0-9_-]{1,64}$")
-SUBJECT_ID_PATTERN = re.compile(r"^[a-z][a-z0-9_-]{0,62}$")
+SUBJECT_ID_PATTERN = re.compile(
+    rf"^[a-z][a-z0-9_-]{{0,{MAX_SUBJECT_ID_LEN - 1}}}$"
+)
 # "Level 4" / "Set 4" / "lvl-4" → "4" (matches existing Vedic numeric ids).
 _LEVEL_NUM_NAME = re.compile(r"^(?:level|set|lvl)[\s._-]+(\d+)$", re.IGNORECASE)
+
+
+def ensure_subject_id(value: Any, *, allow_blank: bool = False) -> str | None:
+    """Accept a topic id, or raise a message that names the field and the limit."""
+    if value is None:
+        if allow_blank:
+            return None
+        raise ValueError("Topic id is required")
+    text = str(value).strip()
+    if not text:
+        if allow_blank:
+            return None
+        raise ValueError("Topic id is required")
+    if len(text) > MAX_SUBJECT_ID_LEN:
+        raise ValueError(
+            f"Topic id must be at most {MAX_SUBJECT_ID_LEN} characters"
+        )
+    if not SUBJECT_ID_PATTERN.match(text):
+        raise ValueError(
+            "Topic id must be lowercase letters, numbers, hyphens, or underscores, "
+            f"start with a letter, and be at most {MAX_SUBJECT_ID_LEN} characters"
+        )
+    return text
 
 
 def normalize_level_id(value: str) -> str:
@@ -179,14 +206,10 @@ class TaskCreate(BaseModel):
     due_date: str | None = Field(default=None, max_length=32)
     subject_id: str | None = Field(default=None, max_length=MAX_SUBJECT_ID_LEN)
 
-    @field_validator("subject_id")
+    @field_validator("subject_id", mode="before")
     @classmethod
     def validate_subject_id(cls, v: str | None) -> str | None:
-        if v is None or v == "":
-            return None
-        if not SUBJECT_ID_PATTERN.match(v):
-            raise ValueError("Invalid subject_id format")
-        return v
+        return ensure_subject_id(v, allow_blank=True)
 
 
 _DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
@@ -240,11 +263,9 @@ class MasteryCreate(BaseModel):
         out: list[str] = []
         seen: set[str] = set()
         for raw in v or []:
-            sid = str(raw or "").strip()
+            sid = ensure_subject_id(raw, allow_blank=True)
             if not sid:
                 continue
-            if not SUBJECT_ID_PATTERN.match(sid):
-                raise ValueError(f"Invalid subject_id format: {sid}")
             if sid in seen:
                 continue
             seen.add(sid)
@@ -286,17 +307,62 @@ class TaskUpdate(BaseModel):
     completed: bool | None = None
     subject_id: str | None = Field(default=None, max_length=MAX_SUBJECT_ID_LEN)
 
-    @field_validator("subject_id")
+    @field_validator("subject_id", mode="before")
     @classmethod
     def validate_subject_id(cls, v: str | None) -> str | None:
-        if v is None or v == "":
-            return None
-        if not SUBJECT_ID_PATTERN.match(v):
-            raise ValueError("Invalid subject_id format")
-        return v
+        return ensure_subject_id(v, allow_blank=True)
 
 
-class SubjectCreate(BaseModel):
+def _validate_playlist_id(value: str | None) -> str | None:
+    from app.playlists import clean_playlist_id
+
+    return clean_playlist_id(value)
+
+
+def _validate_playlist_name(value: str | None) -> str | None:
+    from app.playlists import clean_playlist_name
+
+    return clean_playlist_name(value)
+
+
+def _reject_playlist_on_mathematics(model: Any) -> None:
+    category = getattr(model, "category", None)
+    if category != "Mathematics":
+        return
+    fields_set = getattr(model, "model_fields_set", set())
+    for name in ("playlist_id", "playlist_name", "playlist_position", "playlist_sort"):
+        if name not in fields_set:
+            continue
+        if getattr(model, name) is None:
+            continue
+        raise ValueError("Mathematics topics do not use playlists")
+
+
+class PlaylistMembership(BaseModel):
+    """Playlist fields shared by subject create, subject update, and science upload."""
+
+    playlist_id: str | None = Field(default=None, max_length=32)
+    playlist_name: str | None = Field(default=None, max_length=80)
+    playlist_position: int | None = Field(default=None, ge=0, le=10000)
+    playlist_sort: int | None = Field(default=None, ge=0, le=1000)
+
+    @field_validator("playlist_id")
+    @classmethod
+    def validate_playlist_id(cls, v: str | None) -> str | None:
+        return _validate_playlist_id(v)
+
+    @field_validator("playlist_name")
+    @classmethod
+    def validate_playlist_name(cls, v: str | None) -> str | None:
+        return _validate_playlist_name(v)
+
+    @model_validator(mode="after")
+    def reject_playlist_for_mathematics(self):
+        _reject_playlist_on_mathematics(self)
+        return self
+
+
+class SubjectCreate(PlaylistMembership):
     """Create a subject (topic) under a STEM category.
 
     Preferred fields: category + topic. subject_id is optional (auto-slugged).
@@ -326,16 +392,10 @@ class SubjectCreate(BaseModel):
             f"category must be one of: {', '.join(STEM_CATEGORIES)}"
         )
 
-    @field_validator("subject_id")
+    @field_validator("subject_id", mode="before")
     @classmethod
     def validate_subject_id(cls, v: str | None) -> str | None:
-        if v is None or v == "":
-            return None
-        if not SUBJECT_ID_PATTERN.match(v):
-            raise ValueError(
-                "subject_id must be lowercase alphanumeric/underscore/hyphen, start with letter"
-            )
-        return v
+        return ensure_subject_id(v, allow_blank=True)
 
     @field_validator("grade_level")
     @classmethod
@@ -353,7 +413,7 @@ class SubjectCreate(BaseModel):
         return (self.topic or self.name or "").strip()
 
 
-class SubjectUpdate(BaseModel):
+class SubjectUpdate(PlaylistMembership):
     """Partial update of a subject (topic, description, category, sort_order, grade)."""
 
     model_config = ConfigDict(str_strip_whitespace=True, extra="forbid")
@@ -399,7 +459,7 @@ class TechnologyPageSpec(BaseModel):
     audio_content_type: str = Field(default="", max_length=80)
 
 
-class ScienceTopicCreate(BaseModel):
+class ScienceTopicCreate(PlaylistMembership):
     """POST /science/topics — admin uploads a STEM lesson topic (any STEM category)."""
 
     model_config = ConfigDict(str_strip_whitespace=True, extra="forbid")
@@ -407,9 +467,10 @@ class ScienceTopicCreate(BaseModel):
     category: str = Field(default="Science", min_length=1, max_length=32)
     topic: str = Field(..., min_length=1, max_length=100)
     grade_level: str | None = Field(default=None, max_length=32)
-    summary: str = Field(default="", max_length=MAX_SUMMARY_LEN)
-    explainer_video_url: str = Field(default="", max_length=MAX_VIDEO_URL_LEN)
-    facebook_video_url: str = Field(default="", max_length=MAX_VIDEO_URL_LEN)
+    # None (omitted or null) means "keep the saved value" when replacing a topic.
+    summary: str | None = Field(default=None, max_length=MAX_SUMMARY_LEN)
+    explainer_video_url: str | None = Field(default=None, max_length=MAX_VIDEO_URL_LEN)
+    facebook_video_url: str | None = Field(default=None, max_length=MAX_VIDEO_URL_LEN)
     image_ext: str = Field(default="", max_length=8)
     image_content_type: str = Field(default="", max_length=80)
     html_ext: str = Field(default="", max_length=8)
@@ -428,16 +489,25 @@ class ScienceTopicCreate(BaseModel):
     @field_validator("grade_level")
     @classmethod
     def validate_grade_level(cls, v: str | None) -> str | None:
+        # None (omitted or null) means keep. Explicit "" clears.
+        if v is None:
+            return None
+        if str(v).strip() == "":
+            return ""
         return normalize_content_grade(v)
 
     @field_validator("explainer_video_url")
     @classmethod
-    def validate_video_url(cls, v: str) -> str:
+    def validate_video_url(cls, v: str | None) -> str | None:
+        if v is None:
+            return None
         return _http_url(v, "Explainer video must be an http(s) URL")
 
     @field_validator("facebook_video_url")
     @classmethod
-    def validate_facebook_video_url(cls, v: str) -> str:
+    def validate_facebook_video_url(cls, v: str | None) -> str | None:
+        if v is None:
+            return None
         return _http_url(v, "Facebook video must be an http(s) URL")
 
 
@@ -455,6 +525,10 @@ class TechnologyTopicCreate(BaseModel):
     @field_validator("grade_level")
     @classmethod
     def validate_grade_level(cls, v: str | None) -> str | None:
+        if v is None:
+            return None
+        if str(v).strip() == "":
+            return ""
         return normalize_content_grade(v)
 
 
@@ -535,11 +609,9 @@ class RecommendationsUpdate(BaseModel):
     def validate_subject_ids(cls, values: list[str]) -> list[str]:
         cleaned: list[str] = []
         for raw in values:
-            sid = str(raw or "").strip()
+            sid = ensure_subject_id(raw, allow_blank=True)
             if not sid:
                 continue
-            if not SUBJECT_ID_PATTERN.match(sid):
-                raise ValueError("Invalid subject_id format")
             if sid not in cleaned:
                 cleaned.append(sid)
         return cleaned
@@ -549,12 +621,15 @@ class RecommendationsUpdate(BaseModel):
     def validate_thumbnails(cls, values: dict[str, str]) -> dict[str, str]:
         cleaned: dict[str, str] = {}
         for raw_id, raw_image in values.items():
-            sid = str(raw_id or "").strip()
+            sid = ensure_subject_id(raw_id, allow_blank=True) or ""
             image = str(raw_image or "").strip()
             if not sid and not image:
                 continue
-            if not SUBJECT_ID_PATTERN.match(sid):
-                raise ValueError("Invalid subject_id format")
+            if not sid:
+                raise ValueError(
+                    "Topic id must be lowercase letters, numbers, hyphens, or underscores, "
+                    f"start with a letter, and be at most {MAX_SUBJECT_ID_LEN} characters"
+                )
             if not image:
                 continue
             decode_thumbnail_image(image)
@@ -582,12 +657,13 @@ class TopicAccessPing(BaseModel):
     subject_id: str = Field(..., min_length=1, max_length=MAX_SUBJECT_ID_LEN)
     elapsed_ms: int = Field(default=0, ge=0, le=300_000)
 
-    @field_validator("subject_id")
+    @field_validator("subject_id", mode="before")
     @classmethod
     def validate_subject_id(cls, v: str) -> str:
-        if not SUBJECT_ID_PATTERN.match(v):
-            raise ValueError("Invalid subject_id format")
-        return v
+        subject_id = ensure_subject_id(v)
+        if not subject_id:
+            raise ValueError("Topic id is required")
+        return subject_id
 
 
 class StartSession(BaseModel):
@@ -596,12 +672,13 @@ class StartSession(BaseModel):
     subject_id: str = Field(..., min_length=1, max_length=MAX_SUBJECT_ID_LEN)
     level_id: str = Field(..., min_length=1, max_length=MAX_LEVEL_ID_LEN)
 
-    @field_validator("subject_id")
+    @field_validator("subject_id", mode="before")
     @classmethod
     def validate_subject_id(cls, v: str) -> str:
-        if not SUBJECT_ID_PATTERN.match(v):
-            raise ValueError("Invalid subject_id format")
-        return v
+        subject_id = ensure_subject_id(v)
+        if not subject_id:
+            raise ValueError("Topic id is required")
+        return subject_id
 
     @field_validator("level_id")
     @classmethod
@@ -618,12 +695,13 @@ class StartAssessment(BaseModel):
 
     subject_id: str = Field(..., min_length=1, max_length=MAX_SUBJECT_ID_LEN)
 
-    @field_validator("subject_id")
+    @field_validator("subject_id", mode="before")
     @classmethod
     def validate_subject_id(cls, v: str) -> str:
-        if not SUBJECT_ID_PATTERN.match(v):
-            raise ValueError("Invalid subject_id format")
-        return v
+        subject_id = ensure_subject_id(v)
+        if not subject_id:
+            raise ValueError("Topic id is required")
+        return subject_id
 
 
 class PaymentSubmit(BaseModel):
@@ -691,6 +769,37 @@ def decode_thumbnail_image(raw: str) -> tuple[bytes, str, str]:
     raise ValueError("Thumbnail must be a PNG or JPEG image")
 
 
+def _subject_id_or_name_length_message(exc: Exception) -> str | None:
+    """Friendlier text for topic-id and name-length errors only.
+
+    Every other validation error keeps Pydantic's own message.
+    """
+    errors = getattr(exc, "errors", None)
+    if not callable(errors):
+        return None
+    parts: list[str] = []
+    for err in errors():
+        msg = str(err.get("msg") or "Invalid value")
+        if msg.startswith("Value error, "):
+            msg = msg[len("Value error, ") :]
+        loc = [str(part) for part in (err.get("loc") or ()) if str(part) != "body"]
+        field = loc[-1] if loc else ""
+        kind = str(err.get("type") or "")
+        is_subject_id = field == "subject_id" or msg.startswith("Topic id")
+        is_name_length = field in ("topic", "name") and (
+            kind in ("string_too_long", "string_too_short")
+            or "at most" in msg
+            or "at least" in msg
+        )
+        if not is_subject_id and not is_name_length:
+            return None
+        if field and field.lower() not in msg.lower() and not msg.startswith("Topic id"):
+            parts.append(f"{field}: {msg}")
+        else:
+            parts.append(msg)
+    return "; ".join(parts) if parts else None
+
+
 def parse_body(model_cls: type[BaseModel], raw: str | bytes | None) -> BaseModel:
     """Parse JSON body into a Pydantic model. Raises ValueError on failure."""
     import json
@@ -708,7 +817,9 @@ def parse_body(model_cls: type[BaseModel], raw: str | bytes | None) -> BaseModel
     try:
         return model_cls.model_validate(data)
     except Exception as exc:
-        # Pydantic ValidationError
+        friendly = _subject_id_or_name_length_message(exc)
+        if friendly:
+            raise ValueError(friendly) from exc
         raise ValueError(str(exc)) from exc
 
 
