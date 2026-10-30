@@ -1044,6 +1044,11 @@ const App = (() => {
     );
   }
 
+  /** Grade to show when a stored topic is opened. Empty or missing stays blank. */
+  function gradeLevelForUpload(stored) {
+    return String(stored || "").trim();
+  }
+
   /** Fixed grade levels for Sign up and Profile comboboxes (order fixed). */
   const GRADE_LEVELS = [
     "Kindergarten",
@@ -1079,6 +1084,44 @@ const App = (() => {
       );
     }
     return opts.join("");
+  }
+
+  /** Drop a previous free-text "(current)" option, then select grade. */
+  function syncUploadGradeOption(selectEl, grade) {
+    if (!selectEl) return;
+    const value = String(grade || "").trim();
+    const stale =
+      typeof selectEl.querySelector === "function"
+        ? selectEl.querySelector("option[data-current-grade]")
+        : null;
+    if (stale && typeof stale.remove === "function") stale.remove();
+    if (value && GRADE_LEVELS.indexOf(value) === -1) {
+      const opt = document.createElement("option");
+      opt.value = value;
+      opt.textContent = value + " (current)";
+      opt.setAttribute("data-current-grade", "1");
+      selectEl.appendChild(opt);
+    }
+    selectEl.value = value;
+  }
+
+  /**
+   * Grade to send on upload. The legacy "(current)" option is the stored value,
+   * so choosing it again is the same as leaving the field untouched.
+   * undefined means omit grade_level.
+   */
+  function uploadGradePayload(selectEl, touched, grade, keepSaved) {
+    const legacy =
+      selectEl && typeof selectEl.querySelector === "function"
+        ? selectEl.querySelector("option[data-current-grade]")
+        : null;
+    if (legacy && String(selectEl.value || "") === String(legacy.value || "")) {
+      return undefined;
+    }
+    if (!keepSaved || touched) {
+      return touched ? grade : grade || null;
+    }
+    return undefined;
   }
 
   function viewAuth() {
@@ -7793,8 +7836,10 @@ const App = (() => {
       const summaryEl = document.getElementById(sciFieldIds.summary);
       const videoEl = document.getElementById(sciFieldIds.video);
       const facebookEl = document.getElementById(sciFieldIds.facebook);
-      if (gradeEl && !sciTouched.grade && found.grade_level) {
-        gradeEl.value = found.grade_level;
+      if (gradeEl && !sciTouched.grade) {
+        // Grade 3 is only the new-topic default. A stored empty grade stays blank.
+        // A free-text grade gets a "(current)" option that is removed on the next fill.
+        syncUploadGradeOption(gradeEl, gradeLevelForUpload(found.grade_level));
       }
       if (summaryEl && !sciTouched.summary) {
         summaryEl.value = found.summary || found.description || "";
@@ -7809,7 +7854,10 @@ const App = (() => {
     const resetUntouchedScienceFields = () => {
       for (const flag of Object.keys(sciFieldIds)) {
         const el = document.getElementById(sciFieldIds[flag]);
-        if (!sciTouched[flag] && el) el.value = sciFieldDefaults[flag];
+        if (!sciTouched[flag] && el) {
+          if (flag === "grade") syncUploadGradeOption(el, sciFieldDefaults.grade);
+          else el.value = sciFieldDefaults[flag];
+        }
         sciTouched[flag] = false;
       }
     };
@@ -7856,7 +7904,7 @@ const App = (() => {
           if (videoEl) videoEl.value = "";
           if (facebookEl) facebookEl.value = "";
           const gradeEl = document.getElementById("sci-grade-level");
-          if (gradeEl) gradeEl.value = "Grade 3";
+          if (gradeEl) syncUploadGradeOption(gradeEl, "Grade 3");
           clearPlaylist();
           if (htmlHint) {
             htmlHint.textContent =
@@ -7959,9 +8007,14 @@ const App = (() => {
           const keepSaved = Boolean(foundTopic && replace);
           const body = { category, topic, replace, ...playlist };
           // Untouched defaults (Grade 3, empty summary) must not overwrite a topic.
-          if (!keepSaved || sciTouched.grade) {
-            body.grade_level = sciTouched.grade ? grade : grade || null;
-          }
+          // The "(current)" option is the stored free-text grade, so it is omitted too.
+          const gradePayload = uploadGradePayload(
+            document.getElementById("sci-grade-level"),
+            sciTouched.grade,
+            grade,
+            keepSaved
+          );
+          if (gradePayload !== undefined) body.grade_level = gradePayload;
           if (!keepSaved || sciTouched.summary) body.summary = summary;
           if (!keepSaved || sciTouched.video) body.explainer_video_url = video;
           if (!keepSaved || sciTouched.facebook) body.facebook_video_url = facebook;
@@ -8018,8 +8071,11 @@ const App = (() => {
     const fillTechGrade = (topicName) => {
       if (techTouched.grade) return;
       const found = findUploadedTopic("Technology", topicName);
-      if (techGradeEl && found && found.grade_level) {
-        techGradeEl.value = found.grade_level;
+      if (techGradeEl && found) {
+        syncUploadGradeOption(techGradeEl, gradeLevelForUpload(found.grade_level));
+      } else if (techGradeEl) {
+        // A new name is not the blank topic. Grade 3 is the new-topic default.
+        syncUploadGradeOption(techGradeEl, "Grade 3");
       }
     };
     if (techTopicSelect && techTopicName) {
@@ -8028,7 +8084,7 @@ const App = (() => {
         techTouched.grade = false;
         if (v) techTopicName.value = v;
         if (v) fillTechGrade(v);
-        else if (techGradeEl) techGradeEl.value = "Grade 3";
+        else if (techGradeEl) syncUploadGradeOption(techGradeEl, "Grade 3");
       };
     }
     if (techTopicName) {
@@ -8104,9 +8160,13 @@ const App = (() => {
             replace,
           };
           const foundTech = findUploadedTopic("Technology", topic);
-          if (!foundTech || !replace || techTouched.grade) {
-            techBody.grade_level = techTouched.grade ? grade : grade || null;
-          }
+          const techGradePayload = uploadGradePayload(
+            techGradeEl,
+            techTouched.grade,
+            grade,
+            Boolean(foundTech && replace)
+          );
+          if (techGradePayload !== undefined) techBody.grade_level = techGradePayload;
           const started = await Api.startTechnologyTopic(token(), techBody);
           const uploads = started.uploads || [];
           log(`Uploading media for ${uploads.length} page(s)…`);

@@ -34,8 +34,10 @@ from app.validation import (
     LevelCreate,
     STEM_CATEGORIES,
     SubjectCreate,
+    canonical_grade_or_keep,
     ensure_subject_id,
     parse_csv_questions,
+    remove_bom,
 )
 
 
@@ -97,6 +99,21 @@ def _slug_piece(text: str) -> str:
     return re.sub(r"-{2,}", "-", slug).strip("-_")
 
 
+def _slug_drops_characters(normalized: str) -> bool:
+    """True when slugify drops a non-ASCII character other than space or punctuation.
+
+    The hash also triggers on symbols, format characters such as ZWSP, and
+    digits from other scripts. Accents are already folded away. ASCII symbols
+    such as "+" stay on the old path so existing ids do not change. The
+    browser does not build subject ids.
+    """
+    for ch in normalized:
+        if ord(ch) < 128 or ch.isspace() or unicodedata.category(ch).startswith("P"):
+            continue
+        return True
+    return False
+
+
 def _hashed_subject_id(prefix: str, normalized: str) -> str:
     digest = hashlib.sha256(normalized.encode("utf-8")).hexdigest()[:_ID_HASH_LEN]
     stem = (prefix or "").strip("-_")[:_ID_PREFIX_MAX].strip("-_")
@@ -111,8 +128,10 @@ def _hashed_subject_id(prefix: str, normalized: str) -> str:
 def slugify_subject_id(category: str, topic: str) -> str:
     """Build a subject_id from category + topic, within MAX_SUBJECT_ID_LEN.
 
-    A slug that fits is used as-is. Truncation and empty fallbacks append a
-    7-char hash of the full normalized name so different names do not collide.
+    A slug that fits is used as-is. A 7-char hash of the normalized name is
+    appended when the slug is truncated, when it is empty, or when slugify
+    drops a non-ASCII character other than whitespace or punctuation. Pure
+    ASCII names keep their existing ids.
     """
     normalized = normalize_topic_name(f"{category}-{topic}")
     category_slug = _slug_piece(category)
@@ -122,7 +141,8 @@ def slugify_subject_id(category: str, topic: str) -> str:
     if not topic_slug:
         return _hashed_subject_id(category_slug, normalized)
     full = f"{category_slug}-{topic_slug}"
-    if len(full) <= MAX_SUBJECT_ID_LEN and re.match(r"^[a-z]", full):
+    fits = len(full) <= MAX_SUBJECT_ID_LEN and re.match(r"^[a-z]", full)
+    if fits and not _slug_drops_characters(normalized):
         subject_id = ensure_subject_id(full)
         return subject_id or _hashed_subject_id(category_slug, normalized)
     return _hashed_subject_id(full, normalized)
@@ -159,6 +179,13 @@ def _quiz_name_message(item: dict[str, Any], *, by_id: bool = False) -> str:
         return f"A quiz subject already uses this topic id ('{sid}'). Rename this topic."
     stored = str(item.get("topic") or item.get("name") or "this name").strip()
     return f"A quiz subject already uses this name ('{stored}'). Rename this topic."
+
+
+def _stored_topic_message(existing: dict[str, Any]) -> str:
+    """Id collision with a different name. Same shape as the quiz-name message."""
+    stored = remove_bom(str(existing.get("topic") or existing.get("name") or "")).strip()
+    stored = re.sub(r"[\x00-\x1f\x7f]", "", stored)[:100].strip() or "this name"
+    return f"A topic already uses this name ('{stored}'). Rename this topic."
 
 
 def find_live_topics(category: str, topic: str) -> list[dict[str, Any]]:
@@ -215,13 +242,12 @@ def resolve_topic_upload(
 
     subject_id = slugify_subject_id(category, topic)
     existing = db.get_item(keys.subject_pk(subject_id), keys.subject_meta_sk())
-    if (
-        lessons_only
-        and existing
-        and not existing.get("deleted_at")
-        and not is_lesson_topic(existing)
-    ):
-        raise ConflictError(_quiz_name_message(existing, by_id=True))
+    if existing and not existing.get("deleted_at"):
+        stored_name = str(existing.get("topic") or existing.get("name") or "")
+        if normalize_topic_name(stored_name) != normalize_topic_name(topic):
+            if lessons_only and not is_lesson_topic(existing):
+                raise ConflictError(_quiz_name_message(existing, by_id=True))
+            raise ReplaceNameConflict(_stored_topic_message(existing))
     return subject_id, existing
 
 
@@ -237,6 +263,12 @@ def create_subject(data: SubjectCreate) -> dict[str, Any]:
     sk = keys.subject_meta_sk()
     existing = db.get_item(pk, sk)
     if existing and not existing.get("deleted_at"):
+        stored_name = str(existing.get("topic") or existing.get("name") or "")
+        # An explicit id the caller chose still reports "already exists".
+        # A generated slug that lands on a different topic names that topic.
+        generated = not (data.subject_id or "").strip()
+        if generated and normalize_topic_name(stored_name) != normalize_topic_name(topic):
+            raise ReplaceNameConflict(_stored_topic_message(existing))
         raise ConflictError(f"Subject '{subject_id}' already exists")
 
     now = _utcnow_iso()
@@ -315,7 +347,7 @@ def update_subject(subject_id: str, data) -> dict[str, Any]:
         updates["category"] = payload["category"]
         tags_changed = True
     if "topic" in payload and payload["topic"] is not None:
-        topic = str(payload["topic"]).strip()
+        topic = remove_bom(str(payload["topic"])).strip()
         if not topic:
             raise ValueError("topic cannot be empty")
         updates["topic"] = topic
@@ -347,8 +379,9 @@ def update_subject(subject_id: str, data) -> dict[str, Any]:
         updates["sort_order"] = order
         updates["GSI1SK"] = f"{order:05d}#{subject_id}"
     if "grade_level" in payload and payload["grade_level"] is not None:
-        # Empty string clears the tag
-        updates["grade_level"] = str(payload["grade_level"] or "").strip()
+        # Empty string clears. A value the request actually sent must be standard.
+        # Omitted grade never reaches here, so a stored legacy grade is left alone.
+        updates["grade_level"] = canonical_grade_or_keep(payload["grade_level"]) or ""
     category_now = updates.get("category") or existing.get("category") or ""
     if str(category_now) == "Mathematics":
         touched = [

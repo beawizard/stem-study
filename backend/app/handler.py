@@ -467,6 +467,8 @@ def _route(
         data = parse_body(SubjectCreate, body)
         try:
             return created(subject_service.create_subject(data))  # type: ignore[arg-type]
+        except ReplaceNameConflict as exc:
+            return conflict(str(exc))
         except ConflictError as exc:
             return bad_request(str(exc))
 
